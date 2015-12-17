@@ -192,7 +192,7 @@ int au_lkup_dentry(struct dentry *dentry, aufs_bindex_t bstart, mode_t type)
 		if (dirperm1)
 			au_fset_lkup(args.flags, IGNORE_PERM);
 
-		if (au_dbwh(dentry) >= 0)
+		if (au_dbwh(dentry) == bindex)
 			break;
 		if (!h_dentry)
 			continue;
@@ -698,6 +698,28 @@ out:
 	return err;
 }
 
+void au_refresh_dop(struct dentry *dentry, int force_reval)
+{
+	const struct dentry_operations *dop
+		= force_reval ? &aufs_dop : dentry->d_sb->s_d_op;
+	static const unsigned int mask
+		= DCACHE_OP_REVALIDATE | DCACHE_OP_WEAK_REVALIDATE;
+
+	BUILD_BUG_ON(sizeof(mask) != sizeof(dentry->d_flags));
+
+	if (dentry->d_op == dop)
+		return;
+
+	AuDbg("%pd\n", dentry);
+	spin_lock(&dentry->d_lock);
+	if (dop == &aufs_dop)
+		dentry->d_flags |= mask;
+	else
+		dentry->d_flags &= ~mask;
+	dentry->d_op = dop;
+	spin_unlock(&dentry->d_lock);
+}
+
 int au_refresh_dentry(struct dentry *dentry, struct dentry *parent)
 {
 	int err, ebrange;
@@ -1053,8 +1075,10 @@ static int aufs_d_revalidate(struct dentry *dentry, unsigned int flags)
 	if (!(flags & (LOOKUP_OPEN | LOOKUP_EMPTY))
 	    && inode
 	    && !(inode->i_state && I_LINKABLE)
-	    && (IS_DEADDIR(inode) || !inode->i_nlink))
+	    && (IS_DEADDIR(inode) || !inode->i_nlink)) {
+		AuTraceErr(err);
 		goto out_inval;
+	}
 
 	do_udba = !au_opt_test(au_mntflags(sb), UDBA_NONE);
 	if (do_udba && inode) {
@@ -1063,8 +1087,10 @@ static int aufs_d_revalidate(struct dentry *dentry, unsigned int flags)
 
 		if (bstart >= 0) {
 			h_inode = au_h_iptr(inode, bstart);
-			if (h_inode && au_test_higen(inode, h_inode))
+			if (h_inode && au_test_higen(inode, h_inode)) {
+				AuTraceErr(err);
 				goto out_inval;
+			}
 		}
 	}
 
@@ -1101,5 +1127,10 @@ static void aufs_d_release(struct dentry *dentry)
 const struct dentry_operations aufs_dop = {
 	.d_revalidate		= aufs_d_revalidate,
 	.d_weak_revalidate	= aufs_d_revalidate,
+	.d_release		= aufs_d_release
+};
+
+/* aufs_dop without d_revalidate */
+const struct dentry_operations aufs_dop_noreval = {
 	.d_release		= aufs_d_release
 };

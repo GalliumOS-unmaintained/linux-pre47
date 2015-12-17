@@ -823,7 +823,7 @@ static bool intel_hpd_irq_event(struct drm_device *dev,
 	return true;
 }
 
-#define HOTPLUG_DELAY_MS	2000
+#define HOTPLUG_DELAY_MS	800
 
 static void i915_digport_work_func(struct work_struct *work)
 {

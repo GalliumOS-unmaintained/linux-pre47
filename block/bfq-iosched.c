@@ -91,7 +91,7 @@ static const int bfq_max_budget_async_rq = 4;
  * when an async request is served, the entity is charged the number
  * of sectors of the request, multiplied by the factor below
  */
-static const int bfq_async_charge_factor = 6;
+static const int bfq_async_charge_factor = 10;
 
 /* Default timeout values, in jiffies, approximating CFQ defaults. */
 static const int bfq_timeout_sync = HZ / 20;
@@ -3868,7 +3868,7 @@ static int bfq_init_queue(struct request_queue *q, struct elevator_type *e)
 	bfqd->bfq_large_burst_thresh = 11;
 	bfqd->bfq_burst_interval = msecs_to_jiffies(500);
 
-	bfqd->low_latency = false;
+	bfqd->low_latency = true;
 
 	bfqd->bfq_wr_coeff = 20;
 	bfqd->bfq_wr_rt_max_time = msecs_to_jiffies(300);

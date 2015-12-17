@@ -127,11 +127,18 @@ bool addr_in_gen_pool(struct gen_pool *pool, unsigned long start,
 #ifdef CONFIG_OF
 extern struct gen_pool *of_get_named_gen_pool(struct device_node *np,
 	const char *propname, int index);
+extern struct gen_pool *of_gen_pool_get(struct device_node *np,
+        const char *propname, int index);
 #else
 static inline struct gen_pool *of_get_named_gen_pool(struct device_node *np,
 	const char *propname, int index)
 {
 	return NULL;
+}
+static inline struct gen_pool *of_gen_pool_get(struct device_node *np,
+        const char *propname, int index)
+{
+        return NULL;
 }
 #endif
 #endif /* __GENALLOC_H__ */

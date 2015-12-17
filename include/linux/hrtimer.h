@@ -295,10 +295,14 @@ extern void hrtimer_peek_ahead_timers(void);
 
 extern void clock_was_set_delayed(void);
 
+extern unsigned int hrtimer_resolution;
+
 #else
 
 # define MONOTONIC_RES_NSEC	LOW_RES_NSEC
 # define KTIME_MONOTONIC_RES	KTIME_LOW_RES
+
+#define hrtimer_resolution      (unsigned int)LOW_RES_NSEC
 
 static inline void hrtimer_peek_ahead_timers(void) { }
 

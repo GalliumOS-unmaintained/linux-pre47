@@ -645,4 +645,31 @@ struct gen_pool *of_get_named_gen_pool(struct device_node *np,
 	return dev_get_gen_pool(&pdev->dev);
 }
 EXPORT_SYMBOL_GPL(of_get_named_gen_pool);
+
+/**
+ * of_gen_pool_get - find a pool by phandle property
+ * @np: device node
+ * @propname: property name containing phandle(s)
+ * @index: index into the phandle array
+ *
+ * Returns the pool that contains the chunk starting at the physical
+ * address of the device tree node pointed at by the phandle property,
+ * or NULL if not found.
+ */
+struct gen_pool *of_gen_pool_get(struct device_node *np,
+        const char *propname, int index)
+{
+        struct platform_device *pdev;
+        struct device_node *np_pool;
+
+        np_pool = of_parse_phandle(np, propname, index);
+        if (!np_pool)
+                return NULL;
+        pdev = of_find_device_by_node(np_pool);
+        of_node_put(np_pool);
+        if (!pdev)
+                return NULL;
+        return gen_pool_get(&pdev->dev);
+}
+EXPORT_SYMBOL_GPL(of_gen_pool_get);
 #endif /* CONFIG_OF */

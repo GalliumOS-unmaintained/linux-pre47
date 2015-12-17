@@ -86,8 +86,8 @@ enum {
 	UNBOUND_POOL_HASH_ORDER	= 6,		/* hashed by pool->attrs */
 	BUSY_WORKER_HASH_ORDER	= 6,		/* 64 pointers */
 
-	MAX_IDLE_WORKERS_RATIO	        = 4,		/* 1/4 of busy can be idle */
-	IDLE_WORKER_TIMEOUT	        = 30 * HZ,	/* keep idle ones for 30 seconds */
+	MAX_IDLE_WORKERS_RATIO	= 8,		/* 1/8 of busy can be idle */
+	IDLE_WORKER_TIMEOUT	= 6 * HZ,	/* keep idle ones for 6 seconds */
 
 	MAYDAY_INITIAL_TIMEOUT  = HZ / 100 >= 2 ? HZ / 100 : 2,
 						/* call for help after 10ms
@@ -1451,13 +1451,13 @@ static void __queue_delayed_work(int cpu, struct workqueue_struct *wq,
 	timer_stats_timer_set_start_info(&dwork->timer);
 
 	dwork->wq = wq;
+	/* timer isn't guaranteed to run in this cpu, record earlier */
+	if (cpu == WORK_CPU_UNBOUND)
+		cpu = raw_smp_processor_id();
 	dwork->cpu = cpu;
 	timer->expires = jiffies + delay;
 
-	if (unlikely(cpu != WORK_CPU_UNBOUND))
-		add_timer_on(timer, cpu);
-	else
-		add_timer(timer);
+	add_timer_on(timer, cpu);
 }
 
 /**

@@ -122,6 +122,9 @@ int au_si_alloc(struct super_block *sb)
 
 	au_sphl_init(&sbinfo->si_files);
 
+	/* with getattr by default */
+	sbinfo->si_iop_array = aufs_iop;
+
 	/* leave other members for sysaufs and si_mnt. */
 	sbinfo->si_sb = sb;
 	sb->s_fs_info = sbinfo;
@@ -246,7 +249,10 @@ int aufs_read_lock(struct dentry *dentry, int flags)
 
 	if (au_ftest_lock(flags, GEN)) {
 		err = au_digen_test(dentry, au_sigen(sb));
-		AuDebugOn(!err && au_dbrange_test(dentry));
+		if (!au_opt_test(au_mntflags(sb), UDBA_NONE))
+			AuDebugOn(!err && au_dbrange_test(dentry));
+		else if (!err)
+			err = au_dbrange_test(dentry);
 		if (unlikely(err))
 			aufs_read_unlock(dentry, flags);
 	}
@@ -287,7 +293,7 @@ int aufs_read_and_write_lock2(struct dentry *d1, struct dentry *d2, int flags)
 	if (unlikely(err))
 		goto out;
 
-	di_write_lock2_child(d1, d2, au_ftest_lock(flags, DIR));
+	di_write_lock2_child(d1, d2, au_ftest_lock(flags, DIRS));
 
 	if (au_ftest_lock(flags, GEN)) {
 		sigen = au_sigen(sb);

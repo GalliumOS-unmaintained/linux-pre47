@@ -1,6 +1,6 @@
 VERSION = 4
 PATCHLEVEL = 1
-SUBLEVEL = 6
+SUBLEVEL = 14
 EXTRAVERSION =
 NAME = Series 4800
 
@@ -10,9 +10,7 @@ NAME = Series 4800
 # Comments in this file are targeted only to the developer, do not
 # expect to learn how to build the kernel reading this file.
 
-CKVERSION = -ck2
-CKNAME = BFS Powered
-EXTRAVERSION :=
+EXTRAVERSION := $(EXTRAVERSION)
 
 # o Do not use make's built-in rules and variables
 #   (this increases performance and avoids hard-to-debug behaviour);

@@ -480,6 +480,8 @@ static ktime_t __hrtimer_get_next_event(struct hrtimer_cpu_base *cpu_base)
  * High resolution timer enabled ?
  */
 static int hrtimer_hres_enabled __read_mostly  = 1;
+unsigned int hrtimer_resolution __read_mostly = LOW_RES_NSEC;
+EXPORT_SYMBOL_GPL(hrtimer_resolution);
 
 /*
  * Enable / Disable high resolution mode
