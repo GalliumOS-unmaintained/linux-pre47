@@ -58,6 +58,22 @@ static struct dmi_system_id __initdata chromebook_kb_backlight_dmi_table[] = {
 		},
 		.callback = setup_keyboard_backlight,
 	},
+        {
+		.ident = "Toshiba Chromebook 2 - Keyboard backlight",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "GOOGLE"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Gandof"),
+		},
+		.callback = setup_keyboard_backlight,
+	},
+        {
+		.ident = "Google Pixel 2 - Keyboard backlight",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "GOOGLE"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Samus"),
+		},
+		.callback = setup_keyboard_backlight,
+	},
 	{
 		.ident = "Dell Chromebook 13 - Keyboard backlight",
 		.matches = {
