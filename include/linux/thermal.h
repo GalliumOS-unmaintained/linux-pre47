@@ -40,6 +40,9 @@
 /* No upper/lower limit requirement */
 #define THERMAL_NO_LIMIT	((u32)~0)
 
+/* use value, which < 0K, to indicate an invalid/uninitialized temperature */
+#define THERMAL_TEMP_INVALID	-274000
+
 /* Unit conversion macros */
 #define KELVIN_TO_CELSIUS(t)	(long)(((long)t-2732 >= 0) ?	\
 				((long)t-2732+5)/10 : ((long)t-2732-5)/10)
@@ -185,6 +188,7 @@ struct thermal_zone_device {
 	int emul_temperature;
 	int passive;
 	unsigned int forced_passive;
+	atomic_t need_update;
 	struct thermal_zone_device_ops *ops;
 	const struct thermal_zone_params *tzp;
 	struct thermal_governor *governor;
