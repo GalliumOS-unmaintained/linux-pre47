@@ -141,6 +141,7 @@ static int set_recommended_min_free_kbytes(void)
 	setup_per_zone_wmarks();
 	return 0;
 }
+late_initcall(set_recommended_min_free_kbytes);
 
 static int start_stop_khugepaged(void)
 {
