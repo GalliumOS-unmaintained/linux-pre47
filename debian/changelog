@@ -1,3 +1,9 @@
+linux-image-4.1.14-galliumos (27) vivid-galliumos; urgency=medium
+
+  * Bump version for coolstar's previous atmel driver patch
+
+ -- reynhout <reynhout@galliumos.org>  Sun, 07 Feb 2016 16:56:24 +0000
+
 linux-image-4.1.14-galliumos (26) vivid-galliumos; urgency=medium
 
   * First version of changelog
