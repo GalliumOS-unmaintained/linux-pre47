@@ -2448,6 +2448,14 @@ static struct mxt_acpi_platform_data samus_platform_data[] = {
 	{ }
 };
 
+static struct mxt_acpi_platform_data peppy_platform_data[] = {
+	{
+		/* Touchscreen */
+		.hid	= "ATML0001",
+	},
+	{ }
+};
+
 static unsigned int chromebook_tp_buttons[] = {
 	KEY_RESERVED,
 	KEY_RESERVED,
@@ -2482,6 +2490,14 @@ static const struct dmi_system_id mxt_dmi_table[] = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "Samus"),
 		},
 		.driver_data = samus_platform_data,
+	},
+	{
+		/* Acer C720P Chromebook */
+		.ident = "Acer C720",
+		.matches = {
+			DMI_MATCH(DMI_PRODUCT_NAME, "Peppy"),
+		},
+		.driver_data = peppy_platform_data,
 	},
 	{
 		/* Other Google Chromebooks */
