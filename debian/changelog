@@ -1,3 +1,9 @@
+linux-image-4.1.14-galliumos (29) vivid-galliumos; urgency=medium
+
+  * Changed config to compile uinput driver
+
+ -- Hugh Greenberg <hugh@galliumos.org>  Fri, 12 Feb 2016 16:56:24 +0000
+
 linux-image-4.1.14-galliumos (27) vivid-galliumos; urgency=medium
 
   * Bump version for coolstar's previous atmel driver patch
