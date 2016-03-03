@@ -132,7 +132,7 @@ struct airspy {
 	int            urbs_submitted;
 
 	/* USB control message buffer */
-	#define BUF_SIZE 24
+	#define BUF_SIZE 128
 	u8 buf[BUF_SIZE];
 
 	/* Current configuration */
@@ -936,9 +936,6 @@ static int airspy_set_if_gain(struct airspy *s)
 
 	ret = airspy_ctrl_msg(s, CMD_SET_VGA_GAIN, 0, s->if_gain->val,
 			&u8tmp, 1);
-	if (ret)
-		goto err;
-err:
 	if (ret)
 		dev_dbg(s->dev, "failed=%d\n", ret);
 

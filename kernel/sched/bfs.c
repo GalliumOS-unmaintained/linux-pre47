@@ -72,6 +72,7 @@
 #include <linux/binfmts.h>
 #include <linux/context_tracking.h>
 #include <linux/sched/prio.h>
+#include <linux/tick.h>
 
 #include <asm/irq_regs.h>
 #include <asm/switch_to.h>
@@ -134,7 +135,7 @@
 
 void print_scheduler_version(void)
 {
-	printk(KERN_INFO "BFS CPU scheduler v0.464 by Con Kolivas.\n");
+	printk(KERN_INFO "BFS CPU scheduler v0.467 by Con Kolivas.\n");
 }
 
 /*
@@ -143,6 +144,11 @@ void print_scheduler_version(void)
  * Tunable via /proc interface.
  */
 int rr_interval __read_mostly = 6;
+
+/* Tunable to choose whether to prioritise latency or throughput, simple
+ * binary yes or no */
+
+int sched_interactive __read_mostly = 1;
 
 /*
  * sched_iso_cpu - sysctl which determines the cpu percentage SCHED_ISO tasks
@@ -228,6 +234,9 @@ static struct global_rq grq;
 
 static DEFINE_MUTEX(sched_hotcpu_mutex);
 
+/* cpus with isolated domains */
+cpumask_var_t cpu_isolated_map;
+
 DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 #ifdef CONFIG_SMP
 struct rq *cpu_rq(int cpu)
@@ -240,7 +249,7 @@ struct rq *cpu_rq(int cpu)
  * sched_domains_mutex serialises calls to init_sched_domains,
  * detach_destroy_domains and partition_sched_domains.
  */
-static DEFINE_MUTEX(sched_domains_mutex);
+DEFINE_MUTEX(sched_domains_mutex);
 
 /*
  * By default the system creates a single root-domain with all cpus as
@@ -857,9 +866,9 @@ static inline bool scaling_rq(struct rq *rq)
 	return rq->scaling;
 }
 
-static inline int locality_diff(struct task_struct *p, struct rq *rq)
+static inline int locality_diff(int cpu, struct rq *rq)
 {
-	return rq->cpu_locality[task_cpu(p)];
+	return rq->cpu_locality[cpu];
 }
 #else /* CONFIG_SMP */
 static inline void set_cpuidle_map(int cpu)
@@ -990,7 +999,7 @@ void set_task_cpu(struct task_struct *p, unsigned int cpu)
 	if (task_cpu(p) == cpu)
 		return;
 	trace_sched_migrate_task(p, cpu);
-	perf_sw_event_sched(PERF_COUNT_SW_CPU_MIGRATIONS, 1, 0);
+	perf_event_task_migrate(p);
 
 	/*
 	 * After ->cpu is set up to a new value, task_grq_lock(p, ...) can be
@@ -1396,6 +1405,8 @@ static void try_preempt(struct task_struct *p, struct rq *this_rq)
 			resched_curr(highest_prio_rq);
 	}
 }
+static int __set_cpus_allowed_ptr(struct task_struct *p,
+				  const struct cpumask *new_mask, bool check);
 #else /* CONFIG_SMP */
 static inline bool needs_other_cpu(struct task_struct *p, int cpu)
 {
@@ -1408,6 +1419,12 @@ static void try_preempt(struct task_struct *p, struct rq *this_rq)
 		return;
 	if (can_preempt(p, uprq->rq_prio, uprq->rq_deadline))
 		resched_curr(uprq);
+}
+
+static inline int __set_cpus_allowed_ptr(struct task_struct *p,
+					 const struct cpumask *new_mask, bool check)
+{
+	return set_cpus_allowed_ptr(p, new_mask);
 }
 #endif /* CONFIG_SMP */
 
@@ -1491,7 +1508,7 @@ static inline void ttwu_activate(struct task_struct *p, struct rq *rq,
 static inline void ttwu_post_activation(struct task_struct *p, struct rq *rq,
 					bool success)
 {
-	trace_sched_wakeup(p, success);
+	trace_sched_wakeup(p);
 	p->state = TASK_RUNNING;
 
 	/*
@@ -1554,6 +1571,8 @@ static bool try_to_wake_up(struct task_struct *p, unsigned int state,
 	if (!((unsigned int)p->state & state))
 		goto out_unlock;
 
+	trace_sched_waking(p);
+
 	if (task_queued(p) || task_running(p))
 		goto out_running;
 
@@ -1589,6 +1608,8 @@ static void try_to_wake_up_local(struct task_struct *p)
 
 	if (!(p->state & TASK_NORMAL))
 		return;
+
+	trace_sched_waking(p);
 
 	if (!task_queued(p)) {
 		if (likely(!task_running(p))) {
@@ -1676,7 +1697,7 @@ int sched_fork(unsigned long __maybe_unused clone_flags, struct task_struct *p)
 	}
 
 	INIT_LIST_HEAD(&p->run_list);
-#if defined(CONFIG_SCHEDSTATS) || defined(CONFIG_TASK_DELAY_ACCT)
+#ifdef CONFIG_SCHED_INFO
 	if (unlikely(sched_info_on()))
 		memset(&p->sched_info, 0, sizeof(p->sched_info));
 #endif
@@ -1721,7 +1742,7 @@ void wake_up_new_task(struct task_struct *p)
 	p->prio = rq->curr->normal_prio;
 
 	activate_task(p, rq);
-	trace_sched_wakeup_new(p, 1);
+	trace_sched_wakeup_new(p);
 	if (unlikely(p->policy == SCHED_FIFO))
 		goto after_ts_init;
 
@@ -1766,12 +1787,29 @@ after_ts_init:
 
 #ifdef CONFIG_PREEMPT_NOTIFIERS
 
+static struct static_key preempt_notifier_key = STATIC_KEY_INIT_FALSE;
+
+void preempt_notifier_inc(void)
+{
+	static_key_slow_inc(&preempt_notifier_key);
+}
+EXPORT_SYMBOL_GPL(preempt_notifier_inc);
+
+void preempt_notifier_dec(void)
+{
+	static_key_slow_dec(&preempt_notifier_key);
+}
+EXPORT_SYMBOL_GPL(preempt_notifier_dec);
+
 /**
  * preempt_notifier_register - tell me when current is being preempted & rescheduled
  * @notifier: notifier struct to register
  */
 void preempt_notifier_register(struct preempt_notifier *notifier)
 {
+	if (!static_key_false(&preempt_notifier_key))
+		WARN(1, "registering preempt_notifier while notifiers disabled\n");
+
 	hlist_add_head(&notifier->link, &current->preempt_notifiers);
 }
 EXPORT_SYMBOL_GPL(preempt_notifier_register);
@@ -1780,7 +1818,7 @@ EXPORT_SYMBOL_GPL(preempt_notifier_register);
  * preempt_notifier_unregister - no longer interested in preemption notifications
  * @notifier: notifier struct to unregister
  *
- * This is safe to call from within a preemption notifier.
+ * This is *not* safe to call from within a preemption notifier.
  */
 void preempt_notifier_unregister(struct preempt_notifier *notifier)
 {
@@ -1788,7 +1826,7 @@ void preempt_notifier_unregister(struct preempt_notifier *notifier)
 }
 EXPORT_SYMBOL_GPL(preempt_notifier_unregister);
 
-static void fire_sched_in_preempt_notifiers(struct task_struct *curr)
+static void __fire_sched_in_preempt_notifiers(struct task_struct *curr)
 {
 	struct preempt_notifier *notifier;
 
@@ -1796,8 +1834,14 @@ static void fire_sched_in_preempt_notifiers(struct task_struct *curr)
 		notifier->ops->sched_in(notifier, raw_smp_processor_id());
 }
 
+static __always_inline void fire_sched_in_preempt_notifiers(struct task_struct *curr)
+{
+	if (static_key_false(&preempt_notifier_key))
+		__fire_sched_in_preempt_notifiers(curr);
+}
+
 static void
-fire_sched_out_preempt_notifiers(struct task_struct *curr,
+__fire_sched_out_preempt_notifiers(struct task_struct *curr,
 				 struct task_struct *next)
 {
 	struct preempt_notifier *notifier;
@@ -1806,13 +1850,21 @@ fire_sched_out_preempt_notifiers(struct task_struct *curr,
 		notifier->ops->sched_out(notifier, next);
 }
 
+static __always_inline void
+fire_sched_out_preempt_notifiers(struct task_struct *curr,
+				 struct task_struct *next)
+{
+	if (static_key_false(&preempt_notifier_key))
+		__fire_sched_out_preempt_notifiers(curr, next);
+}
+
 #else /* !CONFIG_PREEMPT_NOTIFIERS */
 
-static void fire_sched_in_preempt_notifiers(struct task_struct *curr)
+static inline void fire_sched_in_preempt_notifiers(struct task_struct *curr)
 {
 }
 
-static void
+static inline void
 fire_sched_out_preempt_notifiers(struct task_struct *curr,
 				 struct task_struct *next)
 {
@@ -1878,15 +1930,14 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 	 * If a task dies, then it sets TASK_DEAD in tsk->state and calls
 	 * schedule one last time. The schedule call will never return, and
 	 * the scheduled task must drop that reference.
-	 * The test for TASK_DEAD must occur while the runqueue locks are
-	 * still held, otherwise prev could be scheduled on another cpu, die
-	 * there before we look at prev->state, and then the reference would
-	 * be dropped twice.
-	 *		Manfred Spraul <manfred@colorfullife.com>
+	 *
+	 * We must observe prev->state before clearing prev->on_cpu (in
+	 * finish_lock_switch), otherwise a concurrent wakeup can get prev
+	 * running on another CPU and we could rave with its RUNNING -> DEAD
+	 * transition, resulting in a double drop.
 	 */
 	prev_state = prev->state;
 	vtime_task_switch(prev);
-	finish_arch_switch(prev);
 	perf_event_task_sched_in(prev, current);
 	finish_lock_switch(rq, prev);
 	finish_arch_post_lock_switch();
@@ -1963,9 +2014,7 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	spin_release(&grq.lock.dep_map, 1, _THIS_IP_);
 
 	/* Here we just switch the register state and the stack. */
-	context_tracking_task_switch(prev, next);
 	switch_to(prev, next, prev);
-
 	barrier();
 
 	return finish_task_switch(prev);
@@ -1999,6 +2048,16 @@ static unsigned long nr_uninterruptible(void)
 
 /*
  * Check if only the current task is running on the cpu.
+ *
+ * Caution: this function does not check that the caller has disabled
+ * preemption, thus the result might have a time-of-check-to-time-of-use
+ * race.  The caller is responsible to use it correctly, for example:
+ *
+ * - from a non-preemptable section (of course)
+ *
+ * - from a thread that is bound to a single CPU
+ *
+ * - in a loop with very short iterations (e.g. a polling loop)
  */
 bool single_task_running(void)
 {
@@ -2045,10 +2104,10 @@ unsigned long nr_active(void)
  * set to this cpu as being the CPU they're more likely to run on. */
 void get_iowait_load(unsigned long *nr_waiters, unsigned long *load)
 {
-	struct rq *this = this_rq();
+	struct rq *rq = this_rq();
 
-	*nr_waiters = atomic_read(&this->nr_iowait);
-	*load = this->soft_affined;
+	*nr_waiters = atomic_read(&rq->nr_iowait);
+	*load = rq->soft_affined;
 }
 
 /* Variables and functions for calc_load */
@@ -2626,20 +2685,6 @@ void account_idle_time(cputime_t cputime)
 {
 }
 
-void update_cpu_load_nohz(void)
-{
-}
-
-#ifdef CONFIG_NO_HZ_COMMON
-void calc_load_enter_idle(void)
-{
-}
-
-void calc_load_exit_idle(void)
-{
-}
-#endif /* CONFIG_NO_HZ_COMMON */
-
 /*
  * Account guest cpu time to a process.
  * @p: the process that the cpu time gets accounted to
@@ -3165,12 +3210,15 @@ task_struct *earliest_deadline_task(struct rq *rq, int cpu, struct task_struct *
 			 * against its deadline when not, based on cpu cache
 			 * locality.
 			 */
-			if (task_sticky(p) && task_rq(p) != rq) {
-				if (scaling_rq(rq))
-					continue;
-				dl = p->deadline << locality_diff(p, rq);
-			} else
+			if (sched_interactive)
 				dl = p->deadline;
+			else {
+				int tcpu = task_cpu(p);
+
+				if (tcpu != cpu && task_sticky(p) && scaling_rq(rq))
+					continue;
+				dl = p->deadline << locality_diff(tcpu, rq);
+			}
 
 			if (deadline_before(dl, earliest_deadline)) {
 				earliest_deadline = dl;
@@ -3353,21 +3401,16 @@ static void wake_smt_siblings(int __maybe_unused cpu) {}
  *          - return from syscall or exception to user-space
  *          - return from interrupt-handler to user-space
  *
- * WARNING: all callers must re-check need_resched() afterward and reschedule
- * accordingly in case an event triggered the need for rescheduling (such as
- * an interrupt waking up a task) while preemption was disabled in __schedule().
+ * WARNING: must be called with preemption disabled!
  */
 static void __sched __schedule(void)
 {
 	struct task_struct *prev, *next, *idle;
 	unsigned long *switch_count;
-	bool deactivate;
+	bool deactivate = false;
 	struct rq *rq;
 	int cpu;
 
-need_resched:
-	deactivate = false;
-	preempt_disable();
 	cpu = smp_processor_id();
 	rq = cpu_rq(cpu);
 	rcu_note_context_switch();
@@ -3411,17 +3454,6 @@ need_resched:
 			}
 		}
 		switch_count = &prev->nvcsw;
-	}
-
-	/*
-	 * If we are going to sleep and we have plugged IO queued, make
-	 * sure to submit it to avoid deadlocks.
-	 */
-	if (unlikely(deactivate && blk_needs_flush_plug(prev))) {
-		grq_unlock_irq();
-		preempt_enable_no_resched();
-		blk_schedule_flush_plug(prev);
-		goto need_resched;
 	}
 
 	update_clocks(rq);
@@ -3511,13 +3543,33 @@ need_resched:
 	}
 
 rerun_prev_unlocked:
-	sched_preempt_enable_no_resched();
+	return;
+}
+
+static inline void sched_submit_work(struct task_struct *tsk)
+{
+	if (!tsk->state || tsk_is_pi_blocked(tsk) ||
+	    (preempt_count() & PREEMPT_ACTIVE) ||
+	    signal_pending_state(tsk->state, tsk))
+		return;
+
+	/*
+	 * If we are going to sleep and we have plugged IO queued,
+	 * make sure to submit it to avoid deadlocks.
+	 */
+	if (blk_needs_flush_plug(tsk))
+		blk_schedule_flush_plug(tsk);
 }
 
 asmlinkage __visible void __sched schedule(void)
 {
+	struct task_struct *tsk = current;
+
+	sched_submit_work(tsk);
 	do {
+		preempt_disable();
 		__schedule();
+		sched_preempt_enable_no_resched();
 	} while (need_resched());
 }
 
@@ -3557,15 +3609,14 @@ void __sched schedule_preempt_disabled(void)
 static void __sched notrace preempt_schedule_common(void)
 {
 	do {
-		__preempt_count_add(PREEMPT_ACTIVE);
+		preempt_active_enter();
 		__schedule();
-		__preempt_count_sub(PREEMPT_ACTIVE);
+		preempt_active_exit();
 
 		/*
 		 * Check again in case we missed a preemption opportunity
 		 * between schedule and now.
 		 */
-		barrier();
 	} while (need_resched());
 }
 
@@ -3589,9 +3640,8 @@ asmlinkage __visible void __sched notrace preempt_schedule(void)
 NOKPROBE_SYMBOL(preempt_schedule);
 EXPORT_SYMBOL(preempt_schedule);
 
-#ifdef CONFIG_CONTEXT_TRACKING
 /**
- * preempt_schedule_context - preempt_schedule called by tracing
+ * preempt_schedule_notrace - preempt_schedule called by tracing
  *
  * The tracing infrastructure uses preempt_enable_notrace to prevent
  * recursion and tracing preempt enabling caused by the tracing
@@ -3604,7 +3654,7 @@ EXPORT_SYMBOL(preempt_schedule);
  * instead of preempt_schedule() to exit user context if needed before
  * calling the scheduler.
  */
-asmlinkage __visible void __sched notrace preempt_schedule_context(void)
+asmlinkage __visible void __sched notrace preempt_schedule_notrace(void)
 {
 	enum ctx_state prev_ctx;
 
@@ -3612,7 +3662,13 @@ asmlinkage __visible void __sched notrace preempt_schedule_context(void)
 		return;
 
 	do {
-		__preempt_count_add(PREEMPT_ACTIVE);
+		/*
+		 * Use raw __prempt_count() ops that don't call function.
+		 * We can't call functions before disabling preemption which
+		 * disarm preemption tracing recursions.
+		 */
+		__preempt_count_add(PREEMPT_ACTIVE + PREEMPT_DISABLE_OFFSET);
+		barrier();
 		/*
 		 * Needs preempt disabled in case user_exit() is traced
 		 * and the tracer calls preempt_enable_notrace() causing
@@ -3622,12 +3678,11 @@ asmlinkage __visible void __sched notrace preempt_schedule_context(void)
 		__schedule();
 		exception_exit(prev_ctx);
 
-		__preempt_count_sub(PREEMPT_ACTIVE);
 		barrier();
+		__preempt_count_sub(PREEMPT_ACTIVE + PREEMPT_DISABLE_OFFSET);
 	} while (need_resched());
 }
-EXPORT_SYMBOL_GPL(preempt_schedule_context);
-#endif /* CONFIG_CONTEXT_TRACKING */
+EXPORT_SYMBOL_GPL(preempt_schedule_notrace);
 
 #endif /* CONFIG_PREEMPT */
 
@@ -3647,17 +3702,11 @@ asmlinkage __visible void __sched preempt_schedule_irq(void)
 	prev_state = exception_enter();
 
 	do {
-		__preempt_count_add(PREEMPT_ACTIVE);
+		preempt_active_enter();
 		local_irq_enable();
-		schedule();
+		__schedule();
 		local_irq_disable();
-		__preempt_count_sub(PREEMPT_ACTIVE);
-
-		/*
-		 * Check again in case we missed a preemption opportunity
-		 * between schedule and now.
-		 */
-		barrier();
+		preempt_active_exit();
 	} while (need_resched());
 
 	exception_exit(prev_state);
@@ -3911,9 +3960,16 @@ static void __setscheduler(struct task_struct *p, struct rq *rq, int policy,
 	 * Keep a potential priority boosting if called from
 	 * sched_setscheduler().
 	 */
-	if (keep_boost)
+	if (keep_boost) {
+		/*
+		 * Take priority boosted tasks into account. If the new
+		 * effective priority is unchanged, we just store the new
+		 * normal parameters and do not touch the scheduler class and
+		 * the runqueue. This will be done when the task deboost
+		 * itself.
+		 */
 		p->prio = rt_mutex_get_effective_prio(p, p->normal_prio);
-	else
+	} else
 		p->prio = p->normal_prio;
 	if (task_running(p)) {
 		reset_rq_task(rq, p);
@@ -3939,8 +3995,9 @@ static bool check_same_owner(struct task_struct *p)
 	return match;
 }
 
-static int __sched_setscheduler(struct task_struct *p, int policy,
-				const struct sched_param *param, bool user)
+static int
+__sched_setscheduler(struct task_struct *p, int policy,
+		     const struct sched_param *param, bool user, bool pi)
 {
 	struct sched_param zero_param = { .sched_priority = 0 };
 	int queued, retval, oldpolicy = -1;
@@ -4095,7 +4152,7 @@ recheck:
 	queued = task_queued(p);
 	if (queued)
 		dequeue_task(p);
-	__setscheduler(p, rq, policy, param->sched_priority, true);
+	__setscheduler(p, rq, policy, param->sched_priority, pi);
 	if (queued) {
 		enqueue_task(p, rq);
 		try_preempt(p, rq);
@@ -4103,7 +4160,8 @@ recheck:
 	__task_grq_unlock();
 	raw_spin_unlock_irqrestore(&p->pi_lock, flags);
 
-	rt_mutex_adjust_pi(p);
+	if (pi)
+		rt_mutex_adjust_pi(p);
 out:
 	return 0;
 }
@@ -4121,7 +4179,7 @@ out:
 int sched_setscheduler(struct task_struct *p, int policy,
 		       const struct sched_param *param)
 {
-	return __sched_setscheduler(p, policy, param, true);
+	return __sched_setscheduler(p, policy, param, true, true);
 }
 
 EXPORT_SYMBOL_GPL(sched_setscheduler);
@@ -4131,7 +4189,7 @@ int sched_setattr(struct task_struct *p, const struct sched_attr *attr)
 	const struct sched_param param = { .sched_priority = attr->sched_priority };
 	int policy = attr->sched_policy;
 
-	return __sched_setscheduler(p, policy, &param, true);
+	return __sched_setscheduler(p, policy, &param, true, true);
 }
 EXPORT_SYMBOL_GPL(sched_setattr);
 
@@ -4151,7 +4209,7 @@ EXPORT_SYMBOL_GPL(sched_setattr);
 int sched_setscheduler_nocheck(struct task_struct *p, int policy,
 			       const struct sched_param *param)
 {
-	return __sched_setscheduler(p, policy, param, false);
+	return __sched_setscheduler(p, policy, param, false, true);
 }
 
 static int
@@ -4521,7 +4579,7 @@ long sched_setaffinity(pid_t pid, const struct cpumask *in_mask)
 	cpuset_cpus_allowed(p, cpus_allowed);
 	cpumask_and(new_mask, in_mask, cpus_allowed);
 again:
-	retval = set_cpus_allowed_ptr(p, new_mask);
+	retval = __set_cpus_allowed_ptr(p, new_mask, true);
 
 	if (!retval) {
 		cpuset_cpus_allowed(p, cpus_allowed);
@@ -5012,6 +5070,12 @@ void dump_cpu_task(int cpu)
 }
 
 #ifdef CONFIG_SMP
+void set_cpus_allowed_common(struct task_struct *p, const struct cpumask *new_mask)
+{
+	cpumask_copy(&p->cpus_allowed, new_mask);
+	p->nr_cpus_allowed = cpumask_weight(new_mask);
+}
+
 void do_set_cpus_allowed(struct task_struct *p, const struct cpumask *new_mask)
 {
 	cpumask_copy(tsk_cpus_allowed(p), new_mask);
@@ -5031,7 +5095,8 @@ void init_idle(struct task_struct *idle, int cpu)
 	struct rq *rq = cpu_rq(cpu);
 	unsigned long flags;
 
-	time_grq_lock(rq, &flags);
+	raw_spin_lock_irqsave(&idle->pi_lock, flags);
+	time_lock_grq(rq);
 	idle->last_ran = rq->clock_task;
 	idle->state = TASK_RUNNING;
 	/* Setting prio to illegal value shouldn't matter when never queued */
@@ -5047,13 +5112,14 @@ void init_idle(struct task_struct *idle, int cpu)
 	rcu_read_unlock();
 	rq->curr = rq->idle = idle;
 	idle->on_cpu = 1;
-	grq_unlock_irqrestore(&flags);
+	grq_unlock();
+	raw_spin_unlock_irqrestore(&idle->pi_lock, flags);
 
 	/* Set the preempt count _outside_ the spinlocks! */
 	init_idle_preempt_count(idle, cpu);
 
 	ftrace_graph_init_idle_task(idle, cpu);
-#if defined(CONFIG_SMP)
+#ifdef CONFIG_SMP
 	sprintf(idle->comm, "%s/%d", INIT_TASK_COMM, cpu);
 #endif
 }
@@ -5082,6 +5148,52 @@ int task_can_attach(struct task_struct *p,
 		ret = -EINVAL;
 
 	return ret;
+}
+
+void wake_q_add(struct wake_q_head *head, struct task_struct *task)
+{
+	struct wake_q_node *node = &task->wake_q;
+
+	/*
+	 * Atomically grab the task, if ->wake_q is !nil already it means
+	 * its already queued (either by us or someone else) and will get the
+	 * wakeup due to that.
+	 *
+	 * This cmpxchg() implies a full barrier, which pairs with the write
+	 * barrier implied by the wakeup in wake_up_list().
+	 */
+	if (cmpxchg(&node->next, NULL, WAKE_Q_TAIL))
+		return;
+
+	get_task_struct(task);
+
+	/*
+	 * The head is context local, there can be no concurrency.
+	 */
+	*head->lastp = node;
+	head->lastp = &node->next;
+}
+
+void wake_up_q(struct wake_q_head *head)
+{
+	struct wake_q_node *node = head->first;
+
+	while (node != WAKE_Q_TAIL) {
+		struct task_struct *task;
+
+		task = container_of(node, struct task_struct, wake_q);
+		BUG_ON(!task);
+		/* task can safely be re-inserted now */
+		node = node->next;
+		task->wake_q.next = NULL;
+
+		/*
+		 * wake_up_process() implies a wmb() to pair with the queueing
+		 * in wake_q_add() so as not to miss wakeups.
+		 */
+		wake_up_process(task);
+		put_task_struct(task);
+	}
 }
 
 void resched_cpu(int cpu)
@@ -5149,24 +5261,26 @@ static inline struct sched_domain *lowest_flag_domain(int cpu, int flag)
  * selecting an idle cpu will add more delays to the timers than intended
  * (as that cpu's timer base may not be uptodate wrt jiffies etc).
  */
-int get_nohz_timer_target(int pinned)
+int get_nohz_timer_target(void)
 {
-	int cpu = smp_processor_id();
-	int i;
+	int i, cpu = smp_processor_id();
 	struct sched_domain *sd;
 
-	if (pinned || !get_sysctl_timer_migration() || !idle_cpu(cpu))
+	if (!idle_cpu(cpu) && is_housekeeping_cpu(cpu))
 		return cpu;
 
 	rcu_read_lock();
 	for_each_domain(cpu, sd) {
 		for_each_cpu(i, sched_domain_span(sd)) {
-			if (!idle_cpu(i)) {
+			if (!idle_cpu(i) && is_housekeeping_cpu(cpu)) {
 				cpu = i;
 				goto unlock;
 			}
 		}
 	}
+
+	if (!is_housekeeping_cpu(cpu))
+		cpu = housekeeping_any_cpu();
 unlock:
 	rcu_read_unlock();
 	return cpu;
@@ -5206,7 +5320,8 @@ void wake_up_nohz_cpu(int cpu)
  * task must not exit() & deallocate itself prematurely. The
  * call is not atomic; no spinlocks may be held.
  */
-int set_cpus_allowed_ptr(struct task_struct *p, const struct cpumask *new_mask)
+static int __set_cpus_allowed_ptr(struct task_struct *p,
+				  const struct cpumask *new_mask, bool check)
 {
 	bool running_wrong = false;
 	bool queued = false;
@@ -5215,6 +5330,15 @@ int set_cpus_allowed_ptr(struct task_struct *p, const struct cpumask *new_mask)
 	int ret = 0;
 
 	rq = task_grq_lock(p, &flags);
+
+	/*
+	 * Must re-check here, to close a race against __kthread_bind(),
+	 * sched_setaffinity() is not guaranteed to observe the flag.
+	 */
+	if (check && (p->flags & PF_NO_SETAFFINITY)) {
+		ret = -EINVAL;
+		goto out;
+	}
 
 	if (cpumask_equal(tsk_cpus_allowed(p), new_mask))
 		goto out;
@@ -5252,23 +5376,26 @@ out:
 
 	return ret;
 }
+
+int set_cpus_allowed_ptr(struct task_struct *p, const struct cpumask *new_mask)
+{
+	return __set_cpus_allowed_ptr(p, new_mask, false);
+}
 EXPORT_SYMBOL_GPL(set_cpus_allowed_ptr);
 
 #ifdef CONFIG_HOTPLUG_CPU
-extern struct task_struct *cpu_stopper_task;
 /* Run through task list and find tasks affined to the dead cpu, then remove
  * that cpu from the list, enable cpu0 and set the zerobound flag. */
 static void bind_zero(int src_cpu)
 {
-	struct task_struct *p, *t, *stopper;
+	struct task_struct *p, *t;
 	int bound = 0;
 
 	if (src_cpu == 0)
 		return;
 
-	stopper = per_cpu(cpu_stopper_task, src_cpu);
 	do_each_thread(t, p) {
-		if (p != stopper && cpumask_test_cpu(src_cpu, tsk_cpus_allowed(p))) {
+		if (cpumask_test_cpu(src_cpu, tsk_cpus_allowed(p))) {
 			cpumask_clear_cpu(src_cpu, tsk_cpus_allowed(p));
 			cpumask_set_cpu(0, tsk_cpus_allowed(p));
 			p->zerobound = true;
@@ -5522,20 +5649,19 @@ static void register_sched_domain_sysctl(void)
 /* may be called multiple times per register */
 static void unregister_sched_domain_sysctl(void)
 {
-	if (sd_sysctl_header)
-		unregister_sysctl_table(sd_sysctl_header);
+	unregister_sysctl_table(sd_sysctl_header);
 	sd_sysctl_header = NULL;
 	if (sd_ctl_dir[0].child)
 		sd_free_ctl_entry(&sd_ctl_dir[0].child);
 }
-#else
+#else /* CONFIG_SCHED_DEBUG && CONFIG_SYSCTL */
 static void register_sched_domain_sysctl(void)
 {
 }
 static void unregister_sched_domain_sysctl(void)
 {
 }
-#endif
+#endif /* CONFIG_SCHED_DEBUG && CONFIG_SYSCTL */
 
 static void set_rq_online(struct rq *rq)
 {
@@ -5623,6 +5749,16 @@ static int sched_cpu_active(struct notifier_block *nfb,
 				      unsigned long action, void *hcpu)
 {
 	switch (action & ~CPU_TASKS_FROZEN) {
+	case CPU_STARTING:
+		return NOTIFY_OK;
+	case CPU_ONLINE:
+		/*
+		 * At this point a starting CPU has marked itself as online via
+		 * set_cpu_online(). But it might not yet have marked itself
+		 * as active, which is essential from here on.
+		 *
+		 * Thus, fall-through and help the starting CPU along.
+		 */
 	case CPU_DOWN_FAILED:
 		set_cpu_active((long)hcpu, true);
 		return NOTIFY_OK;
@@ -5661,9 +5797,6 @@ int __init migration_init(void)
 	return 0;
 }
 early_initcall(migration_init);
-#endif
-
-#ifdef CONFIG_SMP
 
 static cpumask_var_t sched_domains_tmpmask; /* sched_domains_mutex */
 
@@ -5940,9 +6073,6 @@ cpu_attach_domain(struct sched_domain *sd, struct root_domain *rd, int cpu)
 	rcu_assign_pointer(rq->sd, sd);
 	destroy_sched_domains(tmp, cpu);
 }
-
-/* cpus with isolated domains */
-cpumask_var_t cpu_isolated_map;
 
 /* Setup the mask of cpus configured for isolated domains */
 static int __init isolated_cpu_setup(char *str)
@@ -6451,7 +6581,7 @@ static int __sdt_alloc(const struct cpumask *cpu_map)
 		for_each_cpu(j, cpu_map) {
 			struct sched_domain *sd;
 
-		       	sd = kzalloc_node(sizeof(struct sched_domain) + cpumask_size(),
+			sd = kzalloc_node(sizeof(struct sched_domain) + cpumask_size(),
 					GFP_KERNEL, cpu_to_node(j));
 			if (!sd)
 				return -ENOMEM;
@@ -6835,7 +6965,7 @@ static bool sole_cpu_idle(int cpu)
 #ifdef CONFIG_SCHED_SMT
 static const cpumask_t *thread_cpumask(int cpu)
 {
-	return topology_thread_cpumask(cpu);
+	return topology_sibling_cpumask(cpu);
 }
 /* All this CPU's SMT siblings are idle */
 static bool siblings_cpu_idle(int cpu)
@@ -6899,6 +7029,7 @@ void __init sched_init_smp(void)
 		BUG();
 	free_cpumask_var(non_isolated_cpus);
 
+	mutex_lock(&sched_domains_mutex);
 	grq_lock_irq();
 	/*
 	 * Set up the relative cache distance of each online cpu from each
@@ -6943,6 +7074,7 @@ void __init sched_init_smp(void)
 #endif
 	}
 	grq_unlock_irq();
+	mutex_unlock(&sched_domains_mutex);
 
 	for_each_online_cpu(cpu) {
 		struct rq *rq = cpu_rq(cpu);
@@ -6958,8 +7090,6 @@ void __init sched_init_smp(void)
 {
 }
 #endif /* CONFIG_SMP */
-
-unsigned int sysctl_timer_migration = 1;
 
 int in_sched_functions(unsigned long addr)
 {
@@ -7137,7 +7267,7 @@ EXPORT_SYMBOL(___might_sleep);
 #endif
 
 #ifdef CONFIG_MAGIC_SYSRQ
-void normalize_rt_tasks(void)
+static inline void normalise_rt_tasks(void)
 {
 	struct task_struct *g, *p;
 	unsigned long flags;
@@ -7146,6 +7276,12 @@ void normalize_rt_tasks(void)
 
 	read_lock(&tasklist_lock);
 	for_each_process_thread(g, p) {
+		/*
+		 * Only normalize user tasks:
+		 */
+		if (p->flags & PF_KTHREAD)
+			continue;
+
 		if (!rt_task(p) && !iso_task(p))
 			continue;
 
@@ -7162,6 +7298,11 @@ void normalize_rt_tasks(void)
 		task_grq_unlock(&flags);
 	}
 	read_unlock(&tasklist_lock);
+}
+
+void normalize_rt_tasks(void)
+{
+	normalise_rt_tasks();
 }
 #endif /* CONFIG_MAGIC_SYSRQ */
 
@@ -7308,7 +7449,7 @@ drop_precision:
  * runtime accounting.
  */
 static void cputime_adjust(struct task_cputime *curr,
-			   struct cputime *prev,
+			   struct prev_cputime *prev,
 			   cputime_t *ut, cputime_t *st)
 {
 	cputime_t rtime, stime, utime, total;

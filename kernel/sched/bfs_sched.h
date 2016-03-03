@@ -110,7 +110,7 @@ DECLARE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 
 static inline u64 __rq_clock_broken(struct rq *rq)
 {
-	return ACCESS_ONCE(rq->clock);
+	return READ_ONCE(rq->clock);
 }
 
 static inline u64 rq_clock(struct rq *rq)
@@ -124,6 +124,8 @@ static inline u64 rq_clock_task(struct rq *rq)
 	lockdep_assert_held(rq->grq_lock);
 	return rq->clock_task;
 }
+
+extern struct mutex sched_domains_mutex;
 
 #define rcu_dereference_check_sched_domain(p) \
 	rcu_dereference_check((p), \
@@ -145,6 +147,12 @@ static inline int task_on_rq_queued(struct task_struct *p)
 {
 	return p->on_rq;
 }
+
+#ifdef CONFIG_SMP
+
+extern void set_cpus_allowed_common(struct task_struct *p, const struct cpumask *new_mask);
+
+#endif
 
 #ifdef CONFIG_CPU_IDLE
 static inline void idle_set_state(struct rq *rq,

@@ -176,6 +176,18 @@ static int tcp_write_timeout(struct sock *sk)
 		syn_set = true;
 	} else {
 		if (retransmits_timed_out(sk, sysctl_tcp_retries1, 0, 0)) {
+			/* Some middle-boxes may black-hole Fast Open _after_
+			 * the handshake. Therefore we conservatively disable
+			 * Fast Open on this path on recurring timeouts with
+			 * few or zero bytes acked after Fast Open.
+			 */
+			if (tp->syn_data_acked &&
+			    tp->bytes_acked <= tp->rx_opt.mss_clamp) {
+				tcp_fastopen_cache_set(sk, 0, NULL, true, 0);
+				if (icsk->icsk_retransmits == sysctl_tcp_retries1)
+					NET_INC_STATS_BH(sock_net(sk),
+							 LINUX_MIB_TCPFASTOPENACTIVEFAIL);
+			}
 			/* Black hole detection */
 			tcp_mtu_probing(icsk, sk);
 
@@ -247,7 +259,7 @@ void tcp_delack_timer_handler(struct sock *sk)
 	}
 
 out:
-	if (sk_under_memory_pressure(sk))
+	if (tcp_under_memory_pressure(sk))
 		sk_mem_reclaim(sk);
 }
 
@@ -616,7 +628,7 @@ static void tcp_keepalive_timer (unsigned long data)
 			tcp_write_err(sk);
 			goto out;
 		}
-		if (tcp_write_wakeup(sk) <= 0) {
+		if (tcp_write_wakeup(sk, LINUX_MIB_TCPKEEPALIVE) <= 0) {
 			icsk->icsk_probes_out++;
 			elapsed = keepalive_intvl_when(tp);
 		} else {
@@ -649,4 +661,3 @@ void tcp_init_xmit_timers(struct sock *sk)
 	inet_csk_init_xmit_timers(sk, &tcp_write_timer, &tcp_delack_timer,
 				  &tcp_keepalive_timer);
 }
-EXPORT_SYMBOL(tcp_init_xmit_timers);

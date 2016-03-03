@@ -1723,8 +1723,8 @@ int dlm_master_requery_handler(struct o2net_msg *msg, u32 len, void *data,
 			} else {
 				dispatched = 1;
 				__dlm_lockres_grab_inflight_worker(dlm, res);
+				spin_unlock(&res->spinlock);
 			}
-			spin_unlock(&res->spinlock);
 		} else {
 			/* put.. incase we are not the master */
 			spin_unlock(&res->spinlock);
@@ -2360,6 +2360,8 @@ static void dlm_do_local_recovery_cleanup(struct dlm_ctxt *dlm, u8 dead_node)
 						break;
 					}
 				}
+				dlm_lockres_clear_refmap_bit(dlm, res,
+						dead_node);
 				spin_unlock(&res->spinlock);
 				continue;
 			}

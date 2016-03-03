@@ -21,6 +21,8 @@
 #include <linux/slab.h>
 #include <linux/pci.h>
 #include <linux/platform_device.h>
+#include <linux/gpio/consumer.h>
+#include <linux/acpi.h>
 
 #include "platform_data.h"
 
@@ -32,6 +34,15 @@
 #define PCI_DEVICE_ID_INTEL_BSW		0x22B7
 #define PCI_DEVICE_ID_INTEL_SPTLP	0x9d30
 #define PCI_DEVICE_ID_INTEL_SPTH	0xa130
+
+static const struct acpi_gpio_params reset_gpios = { 0, 0, false };
+static const struct acpi_gpio_params cs_gpios = { 1, 0, false };
+
+static const struct acpi_gpio_mapping acpi_dwc3_byt_gpios[] = {
+	{ "reset-gpios", &reset_gpios, 1 },
+	{ "cs-gpios", &cs_gpios, 1 },
+	{ },
+};
 
 static int dwc3_pci_quirks(struct pci_dev *pdev)
 {
@@ -67,6 +78,36 @@ static int dwc3_pci_quirks(struct pci_dev *pdev)
 						sizeof(pdata));
 	}
 
+	if (pdev->vendor == PCI_VENDOR_ID_INTEL &&
+	    pdev->device == PCI_DEVICE_ID_INTEL_BYT) {
+		struct gpio_desc *gpio;
+
+		acpi_dev_add_driver_gpios(ACPI_COMPANION(&pdev->dev),
+					  acpi_dwc3_byt_gpios);
+
+		/*
+		 * These GPIOs will turn on the USB2 PHY. Note that we have to
+		 * put the gpio descriptors again here because the phy driver
+		 * might want to grab them, too.
+		 */
+		gpio = gpiod_get_optional(&pdev->dev, "cs", GPIOD_OUT_LOW);
+		if (IS_ERR(gpio))
+			return PTR_ERR(gpio);
+
+		gpiod_set_value_cansleep(gpio, 1);
+		gpiod_put(gpio);
+
+		gpio = gpiod_get_optional(&pdev->dev, "reset", GPIOD_OUT_LOW);
+		if (IS_ERR(gpio))
+			return PTR_ERR(gpio);
+
+		if (gpio) {
+			gpiod_set_value_cansleep(gpio, 1);
+			gpiod_put(gpio);
+			usleep_range(10000, 11000);
+		}
+	}
+
 	if (pdev->vendor == PCI_VENDOR_ID_SYNOPSYS &&
 	    (pdev->device == PCI_DEVICE_ID_SYNOPSYS_HAPSUSB3 ||
 	     pdev->device == PCI_DEVICE_ID_SYNOPSYS_HAPSUSB3_AXI ||
@@ -77,6 +118,7 @@ static int dwc3_pci_quirks(struct pci_dev *pdev)
 		memset(&pdata, 0, sizeof(pdata));
 		pdata.usb3_lpm_capable = true;
 		pdata.has_lpm_erratum = true;
+		pdata.dis_enblslpm_quirk = true;
 
 		return platform_device_add_data(pci_get_drvdata(pdev), &pdata,
 						sizeof(pdata));
@@ -145,6 +187,7 @@ err:
 
 static void dwc3_pci_remove(struct pci_dev *pci)
 {
+	acpi_dev_remove_driver_gpios(ACPI_COMPANION(&pci->dev));
 	platform_device_unregister(pci_get_drvdata(pci));
 }
 
