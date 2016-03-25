@@ -1834,7 +1834,8 @@ struct thermal_zone_device *thermal_zone_device_register(const char *type,
 	tz->trips = trips;
 	tz->passive_delay = passive_delay;
 	tz->polling_delay = polling_delay;
-	atomic_set(&tz->need_update, 0);
+	/* A new thermal zone needs to be updated anyway. */
+	atomic_set(&tz->need_update, 1);
 
 	dev_set_name(&tz->device, "thermal_zone%d", tz->id);
 	result = device_register(&tz->device);
@@ -1930,6 +1931,7 @@ struct thermal_zone_device *thermal_zone_device_register(const char *type,
 	INIT_DELAYED_WORK(&(tz->poll_queue), thermal_zone_device_check);
 
 	thermal_zone_device_reset(tz);
+	/* Update the new thermal zone and mark it as already updated. */
 	if (atomic_cmpxchg(&tz->need_update, 1, 0))
 		thermal_zone_device_update(tz);
 
@@ -2203,7 +2205,7 @@ static struct notifier_block thermal_pm_nb = {
 
 static int __init thermal_init(void)
 {
-	int result, notifier_result;
+	int result;
 
 	result = thermal_register_governors();
 	if (result)
@@ -2221,11 +2223,10 @@ static int __init thermal_init(void)
 	if (result)
 		goto exit_netlink;
 
-	notifier_result = register_pm_notifier(&thermal_pm_nb);
-	if (notifier_result)
-		pr_err("Thermal: Can not register suspend notifier"
-			"for thermal framework, return %d\n",
-			notifier_result);
+	result = register_pm_notifier(&thermal_pm_nb);
+	if (result)
+		pr_warn("Thermal: Can not register suspend notifier, return %d\n",
+			result);
 
 	return 0;
 

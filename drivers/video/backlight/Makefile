@@ -58,4 +58,3 @@ obj-$(CONFIG_BACKLIGHT_WM831X)		+= wm831x_bl.o
 obj-$(CONFIG_BACKLIGHT_CHROMEOS_KEYBOARD) += chromebook_kb_backlight.o
 obj-$(CONFIG_BACKLIGHT_CHROMEOS_KEYBOARD) += chromeos_keyboard_bl.o
 obj-$(CONFIG_BACKLIGHT_CHROMEOS_KEYBOARD) += chromeos_keyboard_leds.o
-

@@ -46,6 +46,12 @@ config FS_DAX
 	  or if unsure, say N.  Saying Y will increase the size of the kernel
 	  by about 5kB.
 
+config FS_DAX_PMD
+	bool
+	default FS_DAX
+	depends on FS_DAX
+	depends on BROKEN
+
 endif # BLOCK
 
 # Posix ACL utility routines
@@ -215,7 +221,6 @@ source "fs/pstore/Kconfig"
 source "fs/sysv/Kconfig"
 source "fs/ufs/Kconfig"
 source "fs/exofs/Kconfig"
-source "fs/aufs/Kconfig"
 
 endif # MISC_FILESYSTEMS
 
