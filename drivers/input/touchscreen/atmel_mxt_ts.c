@@ -2525,7 +2525,6 @@ static const struct dmi_system_id mxt_dmi_table[] = {
 		/* 2015 Google Pixel */
 		.ident = "Chromebook Pixel 2",
 		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "GOOGLE"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "Samus"),
 		},
 		.driver_data = samus_platform_data,
@@ -2547,10 +2546,10 @@ static const struct dmi_system_id mxt_dmi_table[] = {
 		.driver_data = chromebook_platform_data,
 	},
 	{
-		/* Other Google Chromebooks */
+		/* Other Google Chromebooks - upstream coreboot */
 		.ident = "Chromebook",
 		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "GOOGLE"),
+			DMI_MATCH(DMI_SYS_VENDOR, "Google"),
 		},
 		.driver_data = chromebook_platform_data,
 	},
