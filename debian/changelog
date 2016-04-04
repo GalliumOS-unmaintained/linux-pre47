@@ -1,3 +1,9 @@
+linux-image-4.1.14-galliumos (30) vivid-galliumos; urgency=medium
+
+  * Bump version for coolstar's previous kbd backlight/DMI_MATCH patch
+
+ -- reynhout <reynhout@galliumos.org>  Mon, 04 Apr 2016 19:26:32 +0000
+
 linux-image-4.1.14-galliumos (29) vivid-galliumos; urgency=medium
 
   * Changed config to compile uinput driver
