@@ -172,12 +172,41 @@ static int byt_max98090_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
+static int snd_byt_prepare(struct device *dev)
+{
+        struct byt_max98090_private *priv = dev_get_drvdata(dev);
+        snd_soc_jack_free_gpios(&priv->jack, ARRAY_SIZE(hs_jack_gpios),
+                                hs_jack_gpios);
+
+        return snd_soc_suspend(dev);
+}
+
+static void snd_byt_complete(struct device *dev)
+{
+        struct byt_max98090_private *priv = dev_get_drvdata(dev);
+        snd_soc_jack_add_gpios(&priv->jack, ARRAY_SIZE(hs_jack_gpios),
+                               hs_jack_gpios);
+
+        snd_soc_resume(dev);
+}
+
+static const struct dev_pm_ops byt_max98090_pm_ops = {
+        .prepare = snd_byt_prepare,
+        .complete = snd_byt_complete,
+};
+
+#define BYT_MAX98090_PM_OPS     (&byt_max98090_pm_ops)
+#else
+#define BYT_MAX98090_PM_OPS     NULL
+#endif
+
 static struct platform_driver byt_max98090_driver = {
 	.probe = byt_max98090_probe,
 	.remove = byt_max98090_remove,
 	.driver = {
 		.name = "byt-max98090",
-		.pm = &snd_soc_pm_ops,
+		.pm = BYT_MAX98090_PM_OPS,
 	},
 };
 module_platform_driver(byt_max98090_driver)

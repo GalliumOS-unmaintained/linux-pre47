@@ -230,38 +230,22 @@ static int sdhci_acpi_sd_probe_slot(struct platform_device *pdev,
 }
 
 static const struct sdhci_acpi_slot sdhci_acpi_slot_int_emmc = {
-	.chip    = &sdhci_acpi_chip_int,
-	.caps    = MMC_CAP_8_BIT_DATA | MMC_CAP_NONREMOVABLE |
-		   MMC_CAP_HW_RESET | MMC_CAP_1_8V_DDR |
-		   MMC_CAP_BUS_WIDTH_TEST | MMC_CAP_WAIT_WHILE_BUSY,
-	.caps2   = MMC_CAP2_HC_ERASE_SZ,
-	.flags   = SDHCI_ACPI_RUNTIME_PM,
-	.quirks  = SDHCI_QUIRK_NO_ENDATTR_IN_NOPDESC,
-	.quirks2 = SDHCI_QUIRK2_PRESET_VALUE_BROKEN |
-		   SDHCI_QUIRK2_STOP_WITH_TC |
-		   SDHCI_QUIRK2_CAPS_BIT63_FOR_HS400,
-	.probe_slot	= sdhci_acpi_emmc_probe_slot,
+        .quirks2 = SDHCI_QUIRK2_BAYTRAIL_EMMC,
+        .chip    = &sdhci_acpi_chip_int,
+        .caps    = MMC_CAP_8_BIT_DATA | MMC_CAP_NONREMOVABLE | MMC_CAP_HW_RESET,
+        .caps2   = MMC_CAP2_HC_ERASE_SZ,
+        .flags   = SDHCI_ACPI_RUNTIME_PM,
 };
 
 static const struct sdhci_acpi_slot sdhci_acpi_slot_int_sdio = {
-	.quirks  = SDHCI_QUIRK_BROKEN_CARD_DETECTION |
-		   SDHCI_QUIRK_NO_ENDATTR_IN_NOPDESC,
-	.quirks2 = SDHCI_QUIRK2_HOST_OFF_CARD_ON,
-	.caps    = MMC_CAP_NONREMOVABLE | MMC_CAP_POWER_OFF_CARD |
-		   MMC_CAP_BUS_WIDTH_TEST | MMC_CAP_WAIT_WHILE_BUSY,
-	.flags   = SDHCI_ACPI_RUNTIME_PM,
-	.pm_caps = MMC_PM_KEEP_POWER,
-	.probe_slot	= sdhci_acpi_sdio_probe_slot,
+        .quirks2 = SDHCI_QUIRK2_HOST_OFF_CARD_ON,
+        .caps    = MMC_CAP_NONREMOVABLE | MMC_CAP_POWER_OFF_CARD,
+        .flags   = SDHCI_ACPI_RUNTIME_PM,
+        .pm_caps = MMC_PM_KEEP_POWER,
 };
 
 static const struct sdhci_acpi_slot sdhci_acpi_slot_int_sd = {
-	.flags   = SDHCI_ACPI_SD_CD | SDHCI_ACPI_SD_CD_OVERRIDE_LEVEL |
-		   SDHCI_ACPI_RUNTIME_PM,
-	.quirks  = SDHCI_QUIRK_NO_ENDATTR_IN_NOPDESC,
-	.quirks2 = SDHCI_QUIRK2_CARD_ON_NEEDS_BUS_ON |
-		   SDHCI_QUIRK2_STOP_WITH_TC,
-	.caps    = MMC_CAP_BUS_WIDTH_TEST | MMC_CAP_WAIT_WHILE_BUSY,
-	.probe_slot	= sdhci_acpi_sd_probe_slot,
+        .quirks  = SDHCI_QUIRK_SINGLE_POWER_WRITE,
 };
 
 struct sdhci_acpi_uid_slot {
@@ -409,6 +393,16 @@ static int sdhci_acpi_probe(struct platform_device *pdev)
 	err = sdhci_add_host(host);
 	if (err)
 		goto err_free;
+
+        if (host->quirks2 & SDHCI_QUIRK2_BAYTRAIL_EMMC) {
+                pr_info("%s: Enabling QoS on Baytrail eMMC slot\n",
+                        __func__);
+                host->mmc->qos = kzalloc(sizeof(struct pm_qos_request),
+                        GFP_KERNEL);
+                if (host->mmc->qos)
+                        pm_qos_add_request(host->mmc->qos,
+                                PM_QOS_CPU_DMA_LATENCY, PM_QOS_DEFAULT_VALUE);
+        }
 
 	if (c->use_runtime_pm) {
 		pm_runtime_set_active(dev);
