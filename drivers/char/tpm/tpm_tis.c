@@ -463,8 +463,8 @@ static int tpm_tis_send(struct tpm_chip *chip, u8 *buf, size_t len)
 		msleep(1);
 	if (!priv->irq_tested) {
 		disable_interrupts(chip);
-		dev_err(chip->pdev,
-			FW_BUG "TPM interrupt not working, polling instead\n");
+//		dev_err(chip->pdev,
+//			FW_BUG "TPM interrupt not working, polling instead\n");
 	}
 	priv->irq_tested = true;
 	return rc;
