@@ -73,17 +73,17 @@ void au_hn_ctl(struct au_hinode *hinode, int do_set)
 
 void au_hn_reset(struct inode *inode, unsigned int flags)
 {
-	aufs_bindex_t bindex, bend;
+	aufs_bindex_t bindex, bbot;
 	struct inode *hi;
 	struct dentry *iwhdentry;
 
-	bend = au_ibend(inode);
-	for (bindex = au_ibstart(inode); bindex <= bend; bindex++) {
+	bbot = au_ibbot(inode);
+	for (bindex = au_ibtop(inode); bindex <= bbot; bindex++) {
 		hi = au_h_iptr(inode, bindex);
 		if (!hi)
 			continue;
 
-		/* mutex_lock_nested(&hi->i_mutex, AuLsc_I_CHILD); */
+		/* inode_lock_nested(hi, AuLsc_I_CHILD); */
 		iwhdentry = au_hi_wh(inode, bindex);
 		if (iwhdentry)
 			dget(iwhdentry);
@@ -93,7 +93,7 @@ void au_hn_reset(struct inode *inode, unsigned int flags)
 			      flags & ~AuHi_XINO);
 		iput(hi);
 		dput(iwhdentry);
-		/* mutex_unlock(&hi->i_mutex); */
+		/* inode_unlock(hi); */
 	}
 }
 
@@ -102,7 +102,7 @@ void au_hn_reset(struct inode *inode, unsigned int flags)
 static int hn_xino(struct inode *inode, struct inode *h_inode)
 {
 	int err;
-	aufs_bindex_t bindex, bend, bfound, bstart;
+	aufs_bindex_t bindex, bbot, bfound, btop;
 	struct inode *h_i;
 
 	err = 0;
@@ -112,15 +112,15 @@ static int hn_xino(struct inode *inode, struct inode *h_inode)
 	}
 
 	bfound = -1;
-	bend = au_ibend(inode);
-	bstart = au_ibstart(inode);
+	bbot = au_ibbot(inode);
+	btop = au_ibtop(inode);
 #if 0 /* reserved for future use */
-	if (bindex == bend) {
+	if (bindex == bbot) {
 		/* keep this ino in rename case */
 		goto out;
 	}
 #endif
-	for (bindex = bstart; bindex <= bend; bindex++)
+	for (bindex = btop; bindex <= bbot; bindex++)
 		if (au_h_iptr(inode, bindex) == h_inode) {
 			bfound = bindex;
 			break;
@@ -128,7 +128,7 @@ static int hn_xino(struct inode *inode, struct inode *h_inode)
 	if (bfound < 0)
 		goto out;
 
-	for (bindex = bstart; bindex <= bend; bindex++) {
+	for (bindex = btop; bindex <= bbot; bindex++) {
 		h_i = au_h_iptr(inode, bindex);
 		if (!h_i)
 			continue;
@@ -322,11 +322,11 @@ static int hn_job(struct hn_job_args *a)
 	if (au_ftest_hnjob(a->flags, TRYXINO0)
 	    && a->inode
 	    && a->h_inode) {
-		mutex_lock_nested(&a->h_inode->i_mutex, AuLsc_I_CHILD);
+		inode_lock_nested(a->h_inode, AuLsc_I_CHILD);
 		if (!a->h_inode->i_nlink
 		    && !(a->h_inode->i_state & I_LINKABLE))
 			hn_xino(a->inode, a->h_inode); /* ignore this error */
-		mutex_unlock(&a->h_inode->i_mutex);
+		inode_unlock(a->h_inode);
 	}
 
 	/* make the generation obsolete */
@@ -433,7 +433,7 @@ static void au_hn_bh(void *_args)
 {
 	struct au_hnotify_args *a = _args;
 	struct super_block *sb;
-	aufs_bindex_t bindex, bend, bfound;
+	aufs_bindex_t bindex, bbot, bfound;
 	unsigned char xino, try_iput;
 	int err;
 	struct inode *inode;
@@ -464,8 +464,8 @@ static void au_hn_bh(void *_args)
 
 	ii_read_lock_parent(a->dir);
 	bfound = -1;
-	bend = au_ibend(a->dir);
-	for (bindex = au_ibstart(a->dir); bindex <= bend; bindex++)
+	bbot = au_ibbot(a->dir);
+	for (bindex = au_ibtop(a->dir); bindex <= bbot; bindex++)
 		if (au_h_iptr(a->dir, bindex) == a->h_dir) {
 			bfound = bindex;
 			break;

@@ -406,9 +406,7 @@ static struct dentry *au_lkup_by_ino(struct path *path, ino_t ino,
 
 	/* do not call vfsub_lkup_one() */
 	dir = d_inode(parent);
-	mutex_lock(&dir->i_mutex);
-	dentry = vfsub_lookup_one_len(arg.name, parent, arg.namelen);
-	mutex_unlock(&dir->i_mutex);
+	dentry = vfsub_lookup_one_len_unlocked(arg.name, parent, arg.namelen);
 	AuTraceErrPtr(dentry);
 	if (IS_ERR(dentry))
 		goto out_name;
@@ -621,7 +619,7 @@ aufs_fh_to_dentry(struct super_block *sb, struct fid *fid, int fh_len,
 
 	/* is the parent dir cached? */
 	br = au_sbr(sb, nsi_lock.bindex);
-	atomic_inc(&br->br_count);
+	au_br_get(br);
 	dentry = decode_by_dir_ino(sb, ino, dir_ino, &nsi_lock);
 	if (IS_ERR(dentry))
 		goto out_unlock;
@@ -645,7 +643,7 @@ accept:
 	dentry = ERR_PTR(-ESTALE);
 out_unlock:
 	if (br)
-		atomic_dec(&br->br_count);
+		au_br_put(br);
 	si_read_unlock(sb);
 out:
 	AuTraceErrPtr(dentry);
@@ -712,7 +710,7 @@ static int aufs_encode_fh(struct inode *inode, __u32 *fh, int *max_len,
 	err = -EIO;
 	parent = NULL;
 	ii_read_lock_child(inode);
-	bindex = au_ibstart(inode);
+	bindex = au_ibtop(inode);
 	if (!dir) {
 		dentry = d_find_any_alias(inode);
 		if (unlikely(!dentry))
@@ -787,7 +785,7 @@ static int aufs_commit_metadata(struct inode *inode)
 	sb = inode->i_sb;
 	si_read_lock(sb, AuLock_FLUSH | AuLock_NOPLMW);
 	ii_write_lock_child(inode);
-	bindex = au_ibstart(inode);
+	bindex = au_ibtop(inode);
 	AuDebugOn(bindex < 0);
 	h_inode = au_h_iptr(inode, bindex);
 
@@ -822,6 +820,11 @@ void au_export_init(struct super_block *sb)
 {
 	struct au_sbinfo *sbinfo;
 	__u32 u;
+
+	BUILD_BUG_ON_MSG(IS_BUILTIN(CONFIG_AUFS_FS)
+			 && IS_MODULE(CONFIG_EXPORTFS),
+			 AUFS_NAME ": unsupported configuration "
+			 "CONFIG_EXPORTFS=m and CONFIG_AUFS_FS=y");
 
 	sb->s_export_op = &aufs_export_op;
 	sbinfo = au_sbi(sb);

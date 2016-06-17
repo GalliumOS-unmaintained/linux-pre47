@@ -58,14 +58,6 @@ struct au_wbr_mfs {
 	unsigned long long	mfsrr_watermark;
 };
 
-struct pseudo_link {
-	union {
-		struct hlist_node hlist;
-		struct rcu_head rcu;
-	};
-	struct inode *inode;
-};
-
 #define AuPlink_NHASH 100
 static inline int au_plink_hash(ino_t ino)
 {
@@ -120,7 +112,7 @@ struct au_sbinfo {
 	/* see AuSi_ flags */
 	unsigned char		au_si_status;
 
-	aufs_bindex_t		si_bend;
+	aufs_bindex_t		si_bbot;
 
 	/* dirty trick to keep br_id plus */
 	unsigned int		si_last_br_id :
@@ -145,9 +137,6 @@ struct au_sbinfo {
 	/* mount flags */
 	/* include/asm-ia64/siginfo.h defines a macro named si_flags */
 	unsigned int		si_mntflags;
-
-	/* symlink to follow_link() and put_link() */
-	struct au_sphlhead	si_symlink;
 
 	/* external inode number (bitmap and translation table) */
 	vfs_readf_t		si_xread;
@@ -214,7 +203,7 @@ struct au_sbinfo {
 #endif
 
 #ifdef CONFIG_AUFS_SBILIST
-	struct list_head	si_list;
+	struct hlist_node	si_list;
 #endif
 
 	/* dirty, necessary for unmounting, sysfs and sysrq */
@@ -309,7 +298,7 @@ extern struct au_wbr_copyup_operations au_wbr_copyup_ops[];
 extern struct au_wbr_create_operations au_wbr_create_ops[];
 int au_cpdown_dirs(struct dentry *dentry, aufs_bindex_t bdst);
 int au_wbr_nonopq(struct dentry *dentry, aufs_bindex_t bindex);
-int au_wbr_do_copyup_bu(struct dentry *dentry, aufs_bindex_t bstart);
+int au_wbr_do_copyup_bu(struct dentry *dentry, aufs_bindex_t btop);
 
 /* mvdown.c */
 int au_mvdown(struct dentry *dentry, struct aufs_mvdown __user *arg);
@@ -388,21 +377,21 @@ AuStub(int, au_busy_or_stale, return -EBUSY, void)
 
 #ifdef CONFIG_AUFS_SBILIST
 /* module.c */
-extern struct au_splhead au_sbilist;
+extern struct au_sphlhead au_sbilist;
 
 static inline void au_sbilist_init(void)
 {
-	au_spl_init(&au_sbilist);
+	au_sphl_init(&au_sbilist);
 }
 
 static inline void au_sbilist_add(struct super_block *sb)
 {
-	au_spl_add(&au_sbi(sb)->si_list, &au_sbilist);
+	au_sphl_add(&au_sbi(sb)->si_list, &au_sbilist);
 }
 
 static inline void au_sbilist_del(struct super_block *sb)
 {
-	au_spl_del(&au_sbi(sb)->si_list, &au_sbilist);
+	au_sphl_del(&au_sbi(sb)->si_list, &au_sbilist);
 }
 
 #ifdef CONFIG_AUFS_MAGIC_SYSRQ
@@ -572,10 +561,10 @@ static inline void si_downgrade_lock(struct super_block *sb)
 
 /* ---------------------------------------------------------------------- */
 
-static inline aufs_bindex_t au_sbend(struct super_block *sb)
+static inline aufs_bindex_t au_sbbot(struct super_block *sb)
 {
 	SiMustAnyLock(sb);
-	return au_sbi(sb)->si_bend;
+	return au_sbi(sb)->si_bbot;
 }
 
 static inline unsigned int au_mntflags(struct super_block *sb)

@@ -122,7 +122,7 @@ out:
 static int au_rdu(struct file *file, struct aufs_rdu *rdu)
 {
 	int err;
-	aufs_bindex_t bend;
+	aufs_bindex_t bbot;
 	struct au_rdu_arg arg = {
 		.ctx = {
 			.actor = au_rdu_fill
@@ -159,8 +159,9 @@ static int au_rdu(struct file *file, struct aufs_rdu *rdu)
 	dentry = file->f_path.dentry;
 	inode = d_inode(dentry);
 #if 1
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 #else
+	/* todo: create a new inline func inode_lock_killable() */
 	err = mutex_lock_killable(&inode->i_mutex);
 	AuTraceErr(err);
 	if (unlikely(err))
@@ -188,12 +189,12 @@ static int au_rdu(struct file *file, struct aufs_rdu *rdu)
 		if (!rdu->blk)
 			rdu->blk = au_dir_size(file, /*dentry*/NULL);
 	}
-	bend = au_fbstart(file);
-	if (cookie->bindex < bend)
-		cookie->bindex = bend;
-	bend = au_fbend_dir(file);
-	/* AuDbg("b%d, b%d\n", cookie->bindex, bend); */
-	for (; !err && cookie->bindex <= bend;
+	bbot = au_fbtop(file);
+	if (cookie->bindex < bbot)
+		cookie->bindex = bbot;
+	bbot = au_fbbot_dir(file);
+	/* AuDbg("b%d, b%d\n", cookie->bindex, bbot); */
+	for (; !err && cookie->bindex <= bbot;
 	     cookie->bindex++, cookie->h_pos = 0) {
 		h_file = au_hf_dir(file, cookie->bindex);
 		if (!h_file)
@@ -214,7 +215,7 @@ static int au_rdu(struct file *file, struct aufs_rdu *rdu)
 	}
 
 	ii_read_lock_child(inode);
-	fsstack_copy_attr_atime(inode, au_h_iptr(inode, au_ibstart(inode)));
+	fsstack_copy_attr_atime(inode, au_h_iptr(inode, au_ibtop(inode)));
 	ii_read_unlock(inode);
 
 out_unlock:
@@ -222,7 +223,7 @@ out_unlock:
 out_si:
 	si_read_unlock(arg.sb);
 out_mtx:
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 out:
 	AuTraceErr(err);
 	return err;

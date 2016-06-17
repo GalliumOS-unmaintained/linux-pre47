@@ -394,6 +394,8 @@ int btrfs_dev_replace_start(struct btrfs_root *root,
 	dev_replace->cursor_right = 0;
 	dev_replace->is_valid = 1;
 	dev_replace->item_needs_writeback = 1;
+	atomic64_set(&dev_replace->num_write_errors, 0);
+	atomic64_set(&dev_replace->num_uncorrectable_read_errors, 0);
 	args->result = BTRFS_IOCTL_DEV_REPLACE_RESULT_NO_ERROR;
 	btrfs_dev_replace_unlock(dev_replace);
 
@@ -614,7 +616,7 @@ static void btrfs_dev_replace_update_device_in_mapping_tree(
 		em = lookup_extent_mapping(em_tree, start, (u64)-1);
 		if (!em)
 			break;
-		map = (struct map_lookup *)em->bdev;
+		map = em->map_lookup;
 		for (i = 0; i < map->num_stripes; i++)
 			if (srcdev == map->stripes[i].dev)
 				map->stripes[i].dev = tgtdev;

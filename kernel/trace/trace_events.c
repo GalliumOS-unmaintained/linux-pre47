@@ -1343,15 +1343,9 @@ event_filter_write(struct file *filp, const char __user *ubuf, size_t cnt,
 	if (cnt >= PAGE_SIZE)
 		return -EINVAL;
 
-	buf = (char *)__get_free_page(GFP_TEMPORARY);
-	if (!buf)
-		return -ENOMEM;
-
-	if (copy_from_user(buf, ubuf, cnt)) {
-		free_page((unsigned long) buf);
-		return -EFAULT;
-	}
-	buf[cnt] = '\0';
+	buf = memdup_user_nul(ubuf, cnt);
+	if (IS_ERR(buf))
+		return PTR_ERR(buf);
 
 	mutex_lock(&event_mutex);
 	file = event_file_data(filp);
@@ -1359,7 +1353,7 @@ event_filter_write(struct file *filp, const char __user *ubuf, size_t cnt,
 		err = apply_event_filter(file, buf);
 	mutex_unlock(&event_mutex);
 
-	free_page((unsigned long) buf);
+	kfree(buf);
 	if (err < 0)
 		return err;
 
@@ -1510,18 +1504,12 @@ subsystem_filter_write(struct file *filp, const char __user *ubuf, size_t cnt,
 	if (cnt >= PAGE_SIZE)
 		return -EINVAL;
 
-	buf = (char *)__get_free_page(GFP_TEMPORARY);
-	if (!buf)
-		return -ENOMEM;
-
-	if (copy_from_user(buf, ubuf, cnt)) {
-		free_page((unsigned long) buf);
-		return -EFAULT;
-	}
-	buf[cnt] = '\0';
+	buf = memdup_user_nul(ubuf, cnt);
+	if (IS_ERR(buf))
+		return PTR_ERR(buf);
 
 	err = apply_subsystem_event_filter(dir, buf);
-	free_page((unsigned long) buf);
+	kfree(buf);
 	if (err < 0)
 		return err;
 
@@ -2107,8 +2095,13 @@ event_create_dir(struct dentry *parent, struct trace_event_file *file)
 	trace_create_file("filter", 0644, file->dir, file,
 			  &ftrace_event_filter_fops);
 
-	trace_create_file("trigger", 0644, file->dir, file,
-			  &event_trigger_fops);
+	/*
+	 * Only event directories that can be enabled should have
+	 * triggers.
+	 */
+	if (!(call->flags & TRACE_EVENT_FL_IGNORE_ENABLE))
+		trace_create_file("trigger", 0644, file->dir, file,
+				  &event_trigger_fops);
 
 	trace_create_file("format", 0444, file->dir, call,
 			  &ftrace_event_format_fops);

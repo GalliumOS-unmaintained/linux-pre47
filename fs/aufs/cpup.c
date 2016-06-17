@@ -40,7 +40,7 @@ void au_cpup_attr_timesizes(struct inode *inode)
 {
 	struct inode *h_inode;
 
-	h_inode = au_h_iptr(inode, au_ibstart(inode));
+	h_inode = au_h_iptr(inode, au_ibtop(inode));
 	fsstack_copy_attr_times(inode, h_inode);
 	fsstack_copy_inode_size(inode, h_inode);
 }
@@ -49,10 +49,10 @@ void au_cpup_attr_nlink(struct inode *inode, int force)
 {
 	struct inode *h_inode;
 	struct super_block *sb;
-	aufs_bindex_t bindex, bend;
+	aufs_bindex_t bindex, bbot;
 
 	sb = inode->i_sb;
-	bindex = au_ibstart(inode);
+	bindex = au_ibtop(inode);
 	h_inode = au_h_iptr(inode, bindex);
 	if (!force
 	    && !S_ISDIR(h_inode->i_mode)
@@ -75,8 +75,8 @@ void au_cpup_attr_nlink(struct inode *inode, int force)
 	 * it may includes whplink directory.
 	 */
 	if (S_ISDIR(h_inode->i_mode)) {
-		bend = au_ibend(inode);
-		for (bindex++; bindex <= bend; bindex++) {
+		bbot = au_ibbot(inode);
+		for (bindex++; bindex <= bbot; bindex++) {
 			h_inode = au_h_iptr(inode, bindex);
 			if (h_inode)
 				au_add_nlink(inode, h_inode);
@@ -88,7 +88,7 @@ void au_cpup_attr_changeable(struct inode *inode)
 {
 	struct inode *h_inode;
 
-	h_inode = au_h_iptr(inode, au_ibstart(inode));
+	h_inode = au_h_iptr(inode, au_ibtop(inode));
 	inode->i_mode = h_inode->i_mode;
 	inode->i_uid = h_inode->i_uid;
 	inode->i_gid = h_inode->i_gid;
@@ -110,7 +110,7 @@ void au_cpup_attr_all(struct inode *inode, int force)
 {
 	struct inode *h_inode;
 
-	h_inode = au_h_iptr(inode, au_ibstart(inode));
+	h_inode = au_h_iptr(inode, au_ibtop(inode));
 	au_cpup_attr_changeable(inode);
 	if (inode->i_nlink > 0)
 		au_cpup_attr_nlink(inode, force);
@@ -238,7 +238,7 @@ static int au_do_copy_file(struct file *dst, struct file *src, loff_t len,
 	size_t sz, rbytes, wbytes;
 	unsigned char all_zero;
 	char *p, *zp;
-	struct mutex *h_mtx;
+	struct inode *h_inode;
 	/* reduce stack usage */
 	struct iattr *ia;
 
@@ -318,12 +318,12 @@ static int au_do_copy_file(struct file *dst, struct file *src, loff_t len,
 			ia->ia_size = dst->f_pos;
 			ia->ia_valid = ATTR_SIZE | ATTR_FILE;
 			ia->ia_file = dst;
-			h_mtx = &file_inode(dst)->i_mutex;
-			mutex_lock_nested(h_mtx, AuLsc_I_CHILD2);
+			h_inode = file_inode(dst);
+			inode_lock_nested(h_inode, AuLsc_I_CHILD2);
 			/* no delegation since it is just created */
 			err = vfsub_notify_change(&dst->f_path, ia,
 						  /*delegated*/NULL);
-			mutex_unlock(h_mtx);
+			inode_unlock(h_inode);
 		}
 	}
 
@@ -451,7 +451,7 @@ static int au_do_cpup_regular(struct au_cp_generic *cpg,
 		cpg->len = l;
 	if (cpg->len) {
 		/* try stopping to update while we are referencing */
-		mutex_lock_nested(&h_src_inode->i_mutex, AuLsc_I_CHILD);
+		inode_lock_nested(h_src_inode, AuLsc_I_CHILD);
 		au_pin_hdir_unlock(cpg->pin);
 
 		h_path.dentry = au_h_dptr(cpg->dentry, cpg->bsrc);
@@ -460,17 +460,17 @@ static int au_do_cpup_regular(struct au_cp_generic *cpg,
 		if (!au_test_nfs(h_src_inode->i_sb))
 			err = vfs_getattr(&h_path, &h_src_attr->st);
 		else {
-			mutex_unlock(&h_src_inode->i_mutex);
+			inode_unlock(h_src_inode);
 			err = vfs_getattr(&h_path, &h_src_attr->st);
-			mutex_lock_nested(&h_src_inode->i_mutex, AuLsc_I_CHILD);
+			inode_lock_nested(h_src_inode, AuLsc_I_CHILD);
 		}
 		if (unlikely(err)) {
-			mutex_unlock(&h_src_inode->i_mutex);
+			inode_unlock(h_src_inode);
 			goto out;
 		}
 		h_src_attr->valid = 1;
 		err = au_cp_regular(cpg);
-		mutex_unlock(&h_src_inode->i_mutex);
+		inode_unlock(h_src_inode);
 		rerr = au_pin_hdir_relock(cpg->pin);
 		if (!err && rerr)
 			err = rerr;
@@ -567,7 +567,7 @@ static int au_do_cpup_dir(struct au_cp_generic *cpg, struct dentry *dst_parent,
 	 * particularry setattr case
 	 */
 	dir = d_inode(dst_parent);
-	if (au_ibstart(dir) == cpg->bdst)
+	if (au_ibtop(dir) == cpg->bdst)
 		au_cpup_attr_nlink(dir, /*force*/1);
 	inode = d_inode(cpg->dentry);
 	au_cpup_attr_nlink(inode, /*force*/1);
@@ -728,7 +728,7 @@ out:
 static int au_cpup_single(struct au_cp_generic *cpg, struct dentry *dst_parent)
 {
 	int err, rerr;
-	aufs_bindex_t old_ibstart;
+	aufs_bindex_t old_ibtop;
 	unsigned char isdir, plink;
 	struct dentry *h_src, *h_dst, *h_parent;
 	struct inode *dst_inode, *h_dir, *inode, *delegated, *src_inode;
@@ -816,12 +816,12 @@ static int au_cpup_single(struct au_cp_generic *cpg, struct dentry *dst_parent)
 	}
 
 	isdir = S_ISDIR(inode->i_mode);
-	old_ibstart = au_ibstart(inode);
+	old_ibtop = au_ibtop(inode);
 	err = cpup_entry(cpg, dst_parent, &a->h_src_attr);
 	if (unlikely(err))
 		goto out_rev;
 	dst_inode = d_inode(h_dst);
-	mutex_lock_nested(&dst_inode->i_mutex, AuLsc_I_CHILD2);
+	inode_lock_nested(dst_inode, AuLsc_I_CHILD2);
 	/* todo: necessary? */
 	/* au_pin_hdir_unlock(cpg->pin); */
 
@@ -829,29 +829,29 @@ static int au_cpup_single(struct au_cp_generic *cpg, struct dentry *dst_parent)
 	if (unlikely(err)) {
 		/* todo: necessary? */
 		/* au_pin_hdir_relock(cpg->pin); */ /* ignore an error */
-		mutex_unlock(&dst_inode->i_mutex);
+		inode_unlock(dst_inode);
 		goto out_rev;
 	}
 
-	if (cpg->bdst < old_ibstart) {
+	if (cpg->bdst < old_ibtop) {
 		if (S_ISREG(inode->i_mode)) {
 			err = au_dy_iaop(inode, cpg->bdst, dst_inode);
 			if (unlikely(err)) {
 				/* ignore an error */
 				/* au_pin_hdir_relock(cpg->pin); */
-				mutex_unlock(&dst_inode->i_mutex);
+				inode_unlock(dst_inode);
 				goto out_rev;
 			}
 		}
-		au_set_ibstart(inode, cpg->bdst);
+		au_set_ibtop(inode, cpg->bdst);
 	} else
-		au_set_ibend(inode, cpg->bdst);
+		au_set_ibbot(inode, cpg->bdst);
 	au_set_h_iptr(inode, cpg->bdst, au_igrab(dst_inode),
 		      au_hi_flags(inode, isdir));
 
 	/* todo: necessary? */
 	/* err = au_pin_hdir_relock(cpg->pin); */
-	mutex_unlock(&dst_inode->i_mutex);
+	inode_unlock(dst_inode);
 	if (unlikely(err))
 		goto out_rev;
 
@@ -1001,7 +1001,7 @@ static int au_cpup_simple(struct au_cp_generic *cpg)
 
 		/* revert */
 		au_set_h_dptr(dentry, cpg->bdst, NULL);
-		au_set_dbstart(dentry, cpg->bsrc);
+		au_set_dbtop(dentry, cpg->bsrc);
 	}
 
 	return err;
@@ -1063,20 +1063,20 @@ out:
 
 int au_sio_cpup_simple(struct au_cp_generic *cpg)
 {
-	aufs_bindex_t bsrc, bend;
+	aufs_bindex_t bsrc, bbot;
 	struct dentry *dentry, *h_dentry;
 
 	if (cpg->bsrc < 0) {
 		dentry = cpg->dentry;
-		bend = au_dbend(dentry);
-		for (bsrc = cpg->bdst + 1; bsrc <= bend; bsrc++) {
+		bbot = au_dbbot(dentry);
+		for (bsrc = cpg->bdst + 1; bsrc <= bbot; bsrc++) {
 			h_dentry = au_h_dptr(dentry, bsrc);
 			if (h_dentry) {
 				AuDebugOn(d_is_negative(h_dentry));
 				break;
 			}
 		}
-		AuDebugOn(bsrc > bend);
+		AuDebugOn(bsrc > bbot);
 		cpg->bsrc = bsrc;
 	}
 	AuDebugOn(cpg->bsrc <= cpg->bdst);
@@ -1108,10 +1108,10 @@ static int au_do_cpup_wh(struct au_cp_generic *cpg, struct dentry *wh_dentry,
 	AuRwMustWriteLock(&dinfo->di_rwsem);
 
 	bsrc_orig = cpg->bsrc;
-	cpg->bsrc = dinfo->di_bstart;
+	cpg->bsrc = dinfo->di_btop;
 	hdp = dinfo->di_hdentry;
 	h_d_dst = hdp[0 + cpg->bdst].hd_dentry;
-	dinfo->di_bstart = cpg->bdst;
+	dinfo->di_btop = cpg->bdst;
 	hdp[0 + cpg->bdst].hd_dentry = wh_dentry;
 	h_d_start = NULL;
 	if (file) {
@@ -1128,7 +1128,7 @@ static int au_do_cpup_wh(struct au_cp_generic *cpg, struct dentry *wh_dentry,
 		hdp[0 + cpg->bsrc].hd_dentry = h_d_start;
 	}
 	hdp[0 + cpg->bdst].hd_dentry = h_d_dst;
-	dinfo->di_bstart = cpg->bsrc;
+	dinfo->di_btop = cpg->bsrc;
 	cpg->bsrc = bsrc_orig;
 
 	return err;
@@ -1225,7 +1225,7 @@ int au_sio_cpup_wh(struct au_cp_generic *cpg, struct file *file)
 		h_tmpdir = d_inode(h_orph);
 		au_set_h_iptr(dir, bdst, au_igrab(h_tmpdir), /*flags*/0);
 
-		mutex_lock_nested(&h_tmpdir->i_mutex, AuLsc_I_PARENT3);
+		inode_lock_nested(h_tmpdir, AuLsc_I_PARENT3);
 		/* todo: au_h_open_pre()? */
 
 		pin_orig = cpg->pin;
@@ -1249,7 +1249,7 @@ int au_sio_cpup_wh(struct au_cp_generic *cpg, struct file *file)
 	}
 
 	if (h_orph) {
-		mutex_unlock(&h_tmpdir->i_mutex);
+		inode_unlock(h_tmpdir);
 		/* todo: au_h_open_post()? */
 		au_set_h_iptr(dir, bdst, au_igrab(h_dir), /*flags*/0);
 		au_set_h_dptr(parent, bdst, h_parent);
@@ -1312,7 +1312,7 @@ int au_cp_dirs(struct dentry *dentry, aufs_bindex_t bdst,
 		h_dentry = au_h_dptr(d, bdst);
 		if (!h_dentry || d_is_negative(h_dentry)) {
 			if (h_dentry)
-				au_update_dbstart(d);
+				au_update_dbtop(d);
 
 			au_pin_set_dentry(&pin, d);
 			err = au_do_pin(&pin);

@@ -41,7 +41,7 @@ int au_do_open_nondir(struct file *file, int flags, struct file *h_file)
 	finfo = au_fi(file);
 	memset(&finfo->fi_htop, 0, sizeof(finfo->fi_htop));
 	atomic_set(&finfo->fi_mmapped, 0);
-	bindex = au_dbstart(dentry);
+	bindex = au_dbtop(dentry);
 	if (!h_file) {
 		h_dentry = au_h_dptr(dentry, bindex);
 		err = vfsub_test_mntns(file->f_path.mnt, h_dentry->d_sb);
@@ -65,7 +65,7 @@ int au_do_open_nondir(struct file *file, int flags, struct file *h_file)
 			h_inode->i_state |= I_LINKABLE;
 			spin_unlock(&h_inode->i_lock);
 		}
-		au_set_fbstart(file, bindex);
+		au_set_fbtop(file, bindex);
 		au_set_h_fptr(file, bindex, h_file);
 		au_update_figen(file);
 		/* todo: necessary? */
@@ -167,7 +167,7 @@ static void au_read_post(struct inode *inode, struct file *h_file)
 
 struct au_write_pre {
 	blkcnt_t blks;
-	aufs_bindex_t bstart;
+	aufs_bindex_t btop;
 };
 
 /*
@@ -200,7 +200,7 @@ static struct file *au_write_pre(struct file *file, int do_ready,
 
 	di_downgrade_lock(dentry, /*flags*/0);
 	if (wpre)
-		wpre->bstart = au_fbstart(file);
+		wpre->btop = au_fbtop(file);
 	h_file = au_hf_top(file);
 	get_file(h_file);
 	if (wpre)
@@ -221,7 +221,7 @@ static void au_write_post(struct inode *inode, struct file *h_file,
 	struct inode *h_inode;
 
 	au_cpup_attr_timesizes(inode);
-	AuDebugOn(au_ibstart(inode) != wpre->bstart);
+	AuDebugOn(au_ibtop(inode) != wpre->btop);
 	h_inode = file_inode(h_file);
 	inode->i_mode = h_inode->i_mode;
 	ii_write_unlock(inode);
@@ -229,7 +229,7 @@ static void au_write_post(struct inode *inode, struct file *h_file,
 
 	/* AuDbg("blks %llu, %llu\n", (u64)blks, (u64)h_inode->i_blocks); */
 	if (written > 0)
-		au_fhsm_wrote(inode->i_sb, wpre->bstart,
+		au_fhsm_wrote(inode->i_sb, wpre->btop,
 			      /*force*/h_inode->i_blocks > wpre->blks);
 }
 
@@ -273,11 +273,11 @@ static void au_mtx_and_read_lock(struct inode *inode)
 	struct super_block *sb = inode->i_sb;
 
 	while (1) {
-		mutex_lock(&inode->i_mutex);
+		inode_lock(inode);
 		err = si_read_lock(sb, AuLock_FLUSH | AuLock_NOPLM);
 		if (!err)
 			break;
-		mutex_unlock(&inode->i_mutex);
+		inode_unlock(inode);
 		si_read_lock(sb, AuLock_NOPLMW);
 		si_read_unlock(sb);
 	}
@@ -305,7 +305,7 @@ static ssize_t aufs_write(struct file *file, const char __user *ubuf,
 
 out:
 	si_read_unlock(inode->i_sb);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	return err;
 }
 
@@ -390,7 +390,7 @@ static ssize_t aufs_write_iter(struct kiocb *kio, struct iov_iter *iov_iter)
 
 out:
 	si_read_unlock(inode->i_sb);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	return err;
 }
 
@@ -453,7 +453,7 @@ aufs_splice_write(struct pipe_inode_info *pipe, struct file *file, loff_t *ppos,
 
 out:
 	si_read_unlock(inode->i_sb);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	return err;
 }
 
@@ -480,7 +480,7 @@ static long aufs_fallocate(struct file *file, int mode, loff_t offset,
 
 out:
 	si_read_unlock(inode->i_sb);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	return err;
 }
 
@@ -623,7 +623,7 @@ static int aufs_fsync_nondir(struct file *file, loff_t start, loff_t end,
 
 out_unlock:
 	si_read_unlock(inode->i_sb);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 out:
 	return err;
 }
@@ -634,7 +634,7 @@ static int aufs_aio_fsync_nondir(struct kiocb *kio, int datasync)
 {
 	int err;
 	struct au_write_pre wpre;
-	struct inode *inode;
+	struct inode *inode, *h_inode;
 	struct file *file, *h_file;
 
 	err = 0; /* -EBADF; */ /* posix? */
@@ -653,26 +653,24 @@ static int aufs_aio_fsync_nondir(struct kiocb *kio, int datasync)
 	err = -ENOSYS;
 	h_file = au_hf_top(file);
 	if (h_file->f_op->aio_fsync) {
-		struct mutex *h_mtx;
-
-		h_mtx = &file_inode(h_file)->i_mutex;
+		h_inode = file_inode(h_file);
 		if (!is_sync_kiocb(kio)) {
 			get_file(h_file);
 			fput(file);
 		}
 		kio->ki_filp = h_file;
 		err = h_file->f_op->aio_fsync(kio, datasync);
-		mutex_lock_nested(h_mtx, AuLsc_I_CHILD);
+		inode_lock_nested(h_inode, AuLsc_I_CHILD);
 		if (!err)
 			vfsub_update_h_iattr(&h_file->f_path, /*did*/NULL);
 		/*ignore*/
-		mutex_unlock(h_mtx);
+		inode_unlock(h_inode);
 	}
 	au_write_post(inode, h_file, &wpre, /*written*/0);
 
 out_unlock:
 	si_read_unlock(inode->sb);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 out:
 	return err;
 }
