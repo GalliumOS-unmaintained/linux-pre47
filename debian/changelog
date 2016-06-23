@@ -1,0 +1,9 @@
+linux-image-4.5.5-galliumos (9) xenon; urgency=medium
+
+  * Add changelog for parsing by build script
+    - KDEB_PKGVERSION ("26") is set from package version string
+    - LOCALVERSION ("-galliumos") could be parsed from package name
+    - Debian packaging only reads the first changelog entry, so it is
+      safe to change the package name and downrev the version string
+
+ -- reynhout <reynhout@galliumos.org>  Thu, 23 Jun 2016 17:13:24 +0000
