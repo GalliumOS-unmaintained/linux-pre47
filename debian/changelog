@@ -1,7 +1,15 @@
+linux-image-4.5.5-galliumos (9.1) xenon; urgency=medium
+
+  * Config for max98090 on BayTrail and Braswell appears to conflict
+    - Disable Braswell for now to see if we can get BayTrail working
+
+
+ -- reynhout <reynhout@galliumos.org>  Thu, 23 Jun 2016 20:16:06 +0000
+
 linux-image-4.5.5-galliumos (9) xenon; urgency=medium
 
   * Add changelog for parsing by build script
-    - KDEB_PKGVERSION ("26") is set from package version string
+    - KDEB_PKGVERSION ("9") is set from package version string
     - LOCALVERSION ("-galliumos") could be parsed from package name
     - Debian packaging only reads the first changelog entry, so it is
       safe to change the package name and downrev the version string
